@@ -57,6 +57,9 @@ const PLAYM4_BUF_OVER: u32 = 11;
 const T_YV12: i32 = 3;
 const REEXEC_MARKER: &str = "HIK_SDK_LD_READY";
 const DEFAULT_VENDOR_SDK_ROOT: &str = "vendor/linux/x86_64/hik_sdk";
+const DEFAULT_WINDOW_TITLE: &str = "Hikvision Thermal Viewer (Wayland)";
+const DEFAULT_WINDOW_WIDTH: u32 = 960;
+const DEFAULT_WINDOW_HEIGHT: u32 = 720;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -2854,7 +2857,6 @@ type WindowSoftbufferContext = SoftbufferContext<Arc<Window>>;
 type WindowSoftbufferSurface = SoftbufferSurface<Arc<Window>, Arc<Window>>;
 
 struct ViewerApp {
-    args: Args,
     latest_frame: Arc<Mutex<Option<DecodedFrame>>>,
     stop_flag: Arc<AtomicBool>,
     window: Option<Arc<Window>>,
@@ -2868,14 +2870,9 @@ struct ViewerApp {
 }
 
 impl ViewerApp {
-    fn new(
-        args: Args,
-        latest_frame: Arc<Mutex<Option<DecodedFrame>>>,
-        stop_flag: Arc<AtomicBool>,
-    ) -> Self {
-        let blank_len = (args.window_width.max(1) * args.window_height.max(1)) as usize;
+    fn new(latest_frame: Arc<Mutex<Option<DecodedFrame>>>, stop_flag: Arc<AtomicBool>) -> Self {
+        let blank_len = (DEFAULT_WINDOW_WIDTH.max(1) * DEFAULT_WINDOW_HEIGHT.max(1)) as usize;
         Self {
-            args,
             latest_frame,
             stop_flag,
             window: None,
@@ -2922,10 +2919,7 @@ impl ViewerApp {
         let (w, h) = if let Some(frame) = self.last_frame.as_ref() {
             (frame.width, frame.height)
         } else {
-            (
-                self.args.window_width.max(1),
-                self.args.window_height.max(1),
-            )
+            (DEFAULT_WINDOW_WIDTH.max(1), DEFAULT_WINDOW_HEIGHT.max(1))
         };
 
         if w == 0 || h == 0 {
@@ -2998,10 +2992,10 @@ impl ApplicationHandler for ViewerApp {
         }
 
         let attrs = Window::default_attributes()
-            .with_title(self.args.window_title.clone())
+            .with_title(DEFAULT_WINDOW_TITLE)
             .with_inner_size(LogicalSize::new(
-                self.args.window_width as f64,
-                self.args.window_height as f64,
+                DEFAULT_WINDOW_WIDTH as f64,
+                DEFAULT_WINDOW_HEIGHT as f64,
             ));
 
         let window = match event_loop.create_window(attrs) {
@@ -3092,14 +3086,13 @@ impl ApplicationHandler for ViewerApp {
 }
 
 fn run_wayland_window(
-    args: &Args,
     latest_frame: Arc<Mutex<Option<DecodedFrame>>>,
     stop_flag: Arc<AtomicBool>,
 ) -> Result<()> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = ViewerApp::new(args.clone(), latest_frame, stop_flag);
+    let mut app = ViewerApp::new(latest_frame, stop_flag);
     event_loop
         .run_app(&mut app)
         .map_err(|err| anyhow!("winit event loop failed: {err}"))?;
@@ -3233,12 +3226,6 @@ struct Args {
     connect_retries: u32,
     #[arg(long, default_value_t = 10000)]
     reconnect_interval_ms: u32,
-    #[arg(long, default_value = "Hikvision Thermal Viewer (Wayland)")]
-    window_title: String,
-    #[arg(long, default_value_t = 960)]
-    window_width: u32,
-    #[arg(long, default_value_t = 720)]
-    window_height: u32,
     #[arg(long, default_value = "runtime_logs/sdk_logs_rust")]
     log_dir: PathBuf,
     #[arg(long, default_value_t = false)]
@@ -3286,7 +3273,7 @@ fn main() -> Result<()> {
     .context("failed to initialize Hikvision SDK preview session")?;
 
     println!("Login and preview started. Press Esc, q, or close the window to stop.");
-    run_wayland_window(&args, latest_frame, stop_flag)?;
+    run_wayland_window(latest_frame, stop_flag)?;
     println!("Viewer stopped.");
     Ok(())
 }
