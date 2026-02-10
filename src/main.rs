@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use libloading::Library;
 use softbuffer::{Context as SoftbufferContext, Surface as SoftbufferSurface};
 use winit::application::ApplicationHandler;
@@ -506,6 +506,7 @@ impl HikSession {
         session.configure_init_paths(sdk_lib_dir)?;
         session.init_sdk(args)?;
         let device_info = session.login(args)?;
+        session.apply_requested_image_controls(args)?;
         if args.discover
             && let Err(err) = session.log_startup_introspection(args, &device_info)
         {
@@ -682,6 +683,189 @@ impl HikSession {
             );
         }
         Ok(device_info)
+    }
+
+    fn apply_requested_image_controls(&self, args: &Args) -> Result<()> {
+        if args.focus_style.is_none()
+            && args.noise_reduction_mode.is_none()
+            && args.digital_zoom.is_none()
+            && args.palette.is_none()
+        {
+            return Ok(());
+        }
+
+        let channel = args.channel.max(1);
+        println!("Applying image controls on channel {channel}...");
+
+        let mut applied = Vec::new();
+
+        if let Some(mode) = args.noise_reduction_mode {
+            self.apply_noise_reduction_mode(channel, mode)?;
+            applied.push(format!("noise_reduction_mode={}", mode.as_isapi_value()));
+        }
+
+        if let Some(style) = args.focus_style {
+            self.apply_focus_style(channel, style)?;
+            applied.push(format!("focus_style={}", style.as_isapi_value()));
+        }
+
+        if let Some(zoom) = args.digital_zoom {
+            self.apply_digital_zoom(channel, zoom)?;
+            applied.push(format!("digital_zoom={}", zoom.as_isapi_value()));
+        }
+
+        if let Some(palette) = args.palette {
+            self.apply_palette(channel, palette)?;
+            applied.push(format!("palette={}", palette.as_isapi_value()));
+        }
+
+        if !applied.is_empty() {
+            println!("  image_control: {}", applied.join(", "));
+        }
+
+        Ok(())
+    }
+
+    fn apply_focus_style(&self, channel: i32, style: FocusStyleOption) -> Result<()> {
+        let path = format!("/ISAPI/Image/channels/{channel}/focusConfiguration");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read focus config from {path}"))?;
+        let updated_xml = replace_xml_tag_value(&current_xml, "focusStyle", style.as_isapi_value())
+            .with_context(|| format!("focus style not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write focus config to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify focus config from {path}"))?;
+        let actual = extract_xml_value(&verify_xml, "focusStyle").unwrap_or_default();
+        if actual != style.as_isapi_value() {
+            bail!(
+                "focus style did not stick (expected {}, got {})",
+                style.as_isapi_value(),
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_noise_reduction_mode(
+        &self,
+        channel: i32,
+        mode: NoiseReductionModeOption,
+    ) -> Result<()> {
+        let path = format!("/ISAPI/Image/channels/{channel}/noiseReduce");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read noise-reduce config from {path}"))?;
+        let updated_xml = replace_xml_tag_value(&current_xml, "mode", mode.as_isapi_value())
+            .with_context(|| format!("noise-reduction mode not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write noise-reduce config to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify noise-reduce config from {path}"))?;
+        let actual = extract_xml_value(&verify_xml, "mode").unwrap_or_default();
+        if actual != mode.as_isapi_value() {
+            bail!(
+                "noise-reduction mode did not stick (expected {}, got {})",
+                mode.as_isapi_value(),
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_digital_zoom(&self, channel: i32, zoom: DigitalZoomOption) -> Result<()> {
+        let path = format!("/ISAPI/Image/channels/{channel}");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read image channel config from {path}"))?;
+        let expected = zoom.as_isapi_value();
+
+        let updated_xml =
+            replace_xml_tag_value_in_section(&current_xml, "DigitalZoom", "ZoomRatio", expected)
+                .or_else(|_| {
+                    replace_xml_tag_value_in_section(
+                        &current_xml,
+                        "DigitalZoom",
+                        "zoomRatio",
+                        expected,
+                    )
+                })
+                .with_context(|| format!("digital zoom not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write image channel config to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify image channel config from {path}"))?;
+        let actual = extract_xml_value_in_section(&verify_xml, "DigitalZoom", "ZoomRatio")
+            .or_else(|| extract_xml_value_in_section(&verify_xml, "DigitalZoom", "zoomRatio"))
+            .unwrap_or_default();
+        if actual != expected {
+            bail!(
+                "digital zoom did not stick (expected {}, got {})",
+                expected,
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_palette(&self, channel: i32, palette: PaletteOption) -> Result<()> {
+        let path = format!("/ISAPI/Image/channels/{channel}/Palettes");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read palette config from {path}"))?;
+        let expected = palette.as_isapi_value();
+        let updated_xml = replace_xml_tag_value(&current_xml, "mode", expected)
+            .with_context(|| format!("palette mode not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write palette config to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify palette config from {path}"))?;
+        let actual = extract_xml_value(&verify_xml, "mode").unwrap_or_default();
+        if actual != expected {
+            bail!(
+                "palette did not stick (expected {}, got {})",
+                expected,
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
     }
 
     fn log_startup_introspection(
@@ -1345,9 +1529,25 @@ impl HikSession {
     }
 
     fn query_isapi_xml(&self, path: &str) -> Result<String> {
-        let request = format!("GET {path}");
+        self.request_isapi_xml("GET", path, None)
+    }
+
+    fn put_isapi_xml(&self, path: &str, body: &str) -> Result<String> {
+        self.request_isapi_xml("PUT", path, Some(body))
+    }
+
+    fn request_isapi_xml(&self, method: &str, path: &str, body: Option<&str>) -> Result<String> {
+        let request = format!("{method} {path}");
         let mut request_buf = request.into_bytes();
         request_buf.push(0);
+
+        let mut body_buf = body.map(|xml| xml.as_bytes().to_vec());
+        let (in_buffer, in_buffer_size) = if let Some(ref mut data) = body_buf {
+            (data.as_mut_ptr().cast(), data.len() as Dword)
+        } else {
+            (std::ptr::null_mut(), 0)
+        };
+
         let mut out = vec![0_u8; 256 * 1024];
         let mut status = vec![0_u8; 16 * 1024];
 
@@ -1355,8 +1555,8 @@ impl HikSession {
             size: std::mem::size_of::<NetDvrXmlConfigInput>() as Dword,
             request_url: request_buf.as_mut_ptr().cast(),
             request_url_len: request_buf.len().saturating_sub(1) as Dword,
-            in_buffer: std::ptr::null_mut(),
-            in_buffer_size: 0,
+            in_buffer,
+            in_buffer_size,
             recv_timeout: 5000,
             force_encrypt: 0,
             num_of_multipart: 0,
@@ -2161,6 +2361,96 @@ fn extract_xml_value(text: &str, tag: &str) -> Option<String> {
     Some(text[value_start..value_start + end].trim().to_string())
 }
 
+fn extract_xml_value_in_section(text: &str, section_tag: &str, target_tag: &str) -> Option<String> {
+    let (section_value_start, section_value_end, _) = find_xml_tag_bounds(text, section_tag, 0)?;
+    let section = &text[section_value_start..section_value_end];
+    let (value_start, value_end, _) = find_xml_tag_bounds(section, target_tag, 0)?;
+    Some(section[value_start..value_end].trim().to_string())
+}
+
+fn ensure_isapi_response_ok(method: &str, path: &str, payload: &str) -> Result<()> {
+    if let Some(code) = extract_xml_value(payload, "statusCode")
+        && code != "1"
+        && code != "0"
+    {
+        let status_string =
+            extract_xml_value(payload, "statusString").unwrap_or_else(|| "<missing>".to_string());
+        let sub_status_code =
+            extract_xml_value(payload, "subStatusCode").unwrap_or_else(|| "<missing>".to_string());
+        bail!(
+            "{method} {path} failed with statusCode={code}, statusString={status_string}, subStatusCode={sub_status_code}, payload={}",
+            truncate_for_report(payload, 512)
+        );
+    }
+    Ok(())
+}
+
+fn find_xml_tag_bounds(text: &str, tag: &str, start_idx: usize) -> Option<(usize, usize, usize)> {
+    let open_prefix = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut search_start = start_idx.min(text.len());
+
+    while let Some(rel_idx) = text[search_start..].find(&open_prefix) {
+        let open_start = search_start + rel_idx;
+        let after_tag = open_start + open_prefix.len();
+        let next = text.as_bytes().get(after_tag).copied();
+        let valid_boundary = matches!(
+            next,
+            Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+        );
+        if !valid_boundary {
+            search_start = after_tag;
+            continue;
+        }
+
+        let open_end_rel = text[after_tag..].find('>')?;
+        let value_start = after_tag + open_end_rel + 1;
+        let value_end_rel = text[value_start..].find(&close)?;
+        let value_end = value_start + value_end_rel;
+        let close_end = value_end + close.len();
+        return Some((value_start, value_end, close_end));
+    }
+
+    None
+}
+
+fn replace_xml_tag_value(xml: &str, tag: &str, value: &str) -> Result<String> {
+    let (value_start, value_end, _) =
+        find_xml_tag_bounds(xml, tag, 0).ok_or_else(|| anyhow!("tag <{tag}> not found"))?;
+    let mut out = String::with_capacity(xml.len() + value.len());
+    out.push_str(&xml[..value_start]);
+    out.push_str(value);
+    out.push_str(&xml[value_end..]);
+    Ok(out)
+}
+
+fn replace_xml_tag_value_in_section(
+    xml: &str,
+    section_tag: &str,
+    target_tag: &str,
+    value: &str,
+) -> Result<String> {
+    let section_open = format!("<{section_tag}");
+    let section_start = xml
+        .find(&section_open)
+        .ok_or_else(|| anyhow!("section <{section_tag}> not found"))?;
+    let section_close = format!("</{section_tag}>");
+    let section_close_rel = xml[section_start..]
+        .find(&section_close)
+        .ok_or_else(|| anyhow!("section </{section_tag}> not found"))?;
+    let section_end = section_start + section_close_rel + section_close.len();
+
+    let section_xml = &xml[section_start..section_end];
+    let replaced_section = replace_xml_tag_value(section_xml, target_tag, value)
+        .with_context(|| format!("tag <{target_tag}> not found inside <{section_tag}> section"))?;
+
+    let mut out = String::with_capacity(xml.len() + value.len());
+    out.push_str(&xml[..section_start]);
+    out.push_str(&replaced_section);
+    out.push_str(&xml[section_end..]);
+    Ok(out)
+}
+
 fn extract_sdk_error_code(text: &str) -> Option<u32> {
     let marker = "SDK error ";
     let idx = text.find(marker)?;
@@ -2820,6 +3110,89 @@ fn run_wayland_window(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum FocusStyleOption {
+    #[value(name = "AUTO")]
+    Auto,
+    #[value(name = "MANUAL")]
+    Manual,
+    #[value(name = "SEMIAUTOMATIC")]
+    Semiautomatic,
+}
+
+impl FocusStyleOption {
+    fn as_isapi_value(self) -> &'static str {
+        match self {
+            Self::Auto => "AUTO",
+            Self::Manual => "MANUAL",
+            Self::Semiautomatic => "SEMIAUTOMATIC",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum NoiseReductionModeOption {
+    Close,
+    General,
+    Advanced,
+}
+
+impl NoiseReductionModeOption {
+    fn as_isapi_value(self) -> &'static str {
+        match self {
+            Self::Close => "close",
+            Self::General => "general",
+            Self::Advanced => "advanced",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DigitalZoomOption {
+    #[value(name = "1x")]
+    X1,
+    #[value(name = "2x")]
+    X2,
+    #[value(name = "4x")]
+    X4,
+    #[value(name = "8x")]
+    X8,
+}
+
+impl DigitalZoomOption {
+    fn as_isapi_value(self) -> &'static str {
+        match self {
+            Self::X1 => "1x",
+            Self::X2 => "2x",
+            Self::X4 => "4x",
+            Self::X8 => "8x",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PaletteOption {
+    #[value(name = "WhiteHot")]
+    WhiteHot,
+    #[value(name = "BlackHot")]
+    BlackHot,
+    #[value(name = "RedHot")]
+    RedHot,
+    #[value(name = "Fusion1")]
+    Fusion1,
+}
+
+impl PaletteOption {
+    fn as_isapi_value(self) -> &'static str {
+        match self {
+            Self::WhiteHot => "WhiteHot",
+            Self::BlackHot => "BlackHot",
+            Self::RedHot => "RedHot",
+            Self::Fusion1 => "Fusion1",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "hikvision-thermal-wayland-viewer")]
 #[command(about = "Minimal Hikvision viewer in Rust (Wayland-only rendering path).")]
@@ -2836,6 +3209,14 @@ struct Args {
     password: String,
     #[arg(long, default_value_t = 1)]
     channel: i32,
+    #[arg(long, value_enum, ignore_case = true)]
+    focus_style: Option<FocusStyleOption>,
+    #[arg(long, value_enum, ignore_case = true)]
+    noise_reduction_mode: Option<NoiseReductionModeOption>,
+    #[arg(long, value_enum, ignore_case = true)]
+    digital_zoom: Option<DigitalZoomOption>,
+    #[arg(long, value_enum, ignore_case = true)]
+    palette: Option<PaletteOption>,
     #[arg(long, default_value_t = 0)]
     stream_type: u32,
     #[arg(long, default_value_t = 0)]

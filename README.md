@@ -38,6 +38,7 @@ HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --stream-type 1
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --sdk-root /path/to/another/sdk
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --discover
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --discover --discover-report-dir runtime_logs/discovery_reports
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --focus-style SEMIAUTOMATIC --noise-reduction-mode general --digital-zoom 2x --palette WhiteHot
 ```
 
 Binary/package name:
@@ -65,6 +66,12 @@ For an **AGM Taipan `TM10-256`** on this test bench, use:
   - `HIK_SDK_ROOT` -> `<crate>/vendor/linux/x86_64/hik_sdk`
 - Discovery is gated by `--discover`. When enabled, the app prints an SDK/ISAPI introspection summary and writes a JSON report under `runtime_logs/discovery_reports` by default.
 - Use `--discover-report-dir` to override the report output directory.
+- Supported image-control CLI options (current ISAPI surface) are:
+  - `--focus-style` (`AUTO`, `MANUAL`, `SEMIAUTOMATIC`)
+  - `--noise-reduction-mode` (`close`, `general`, `advanced`)
+  - `--digital-zoom` (`1x`, `2x`, `4x`, `8x`)
+- `--palette` (`WhiteHot`, `BlackHot`, `RedHot`, `Fusion1`)
+- These controls are currently known to work on image channel `1` on the Taipan test unit.
 - Vendor layout is platform-scoped to support future targets:
   - `vendor/linux/x86_64/hik_sdk`
   - Add additional SDK bundles under sibling directories (for example `vendor/linux/aarch64/...`) and point `HIK_SDK_ROOT` or `--sdk-root` to the desired one.
