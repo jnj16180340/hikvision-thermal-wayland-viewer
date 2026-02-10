@@ -451,6 +451,7 @@ struct DiscoveryProbeRecord {
     target: String,
     success: bool,
     sdk_error: Option<u32>,
+    sdk_error_name: Option<String>,
     summary: String,
     payload_bytes: usize,
     status_code: Option<String>,
@@ -546,7 +547,7 @@ impl HikSession {
             {
                 bail!(
                     "NET_DVR_SetSDKInitCfg(SDK_PATH) failed (error {})",
-                    self.sdk_last_error()
+                    format_sdk_error(self.sdk_last_error())
                 );
             }
             if (self.hcnetsdk.set_sdk_init_cfg)(
@@ -556,7 +557,7 @@ impl HikSession {
             {
                 bail!(
                     "NET_DVR_SetSDKInitCfg(LIBEAY_PATH) failed (error {})",
-                    self.sdk_last_error()
+                    format_sdk_error(self.sdk_last_error())
                 );
             }
             if (self.hcnetsdk.set_sdk_init_cfg)(
@@ -566,7 +567,7 @@ impl HikSession {
             {
                 bail!(
                     "NET_DVR_SetSDKInitCfg(SSLEAY_PATH) failed (error {})",
-                    self.sdk_last_error()
+                    format_sdk_error(self.sdk_last_error())
                 );
             }
         }
@@ -581,7 +582,10 @@ impl HikSession {
         let log_dir = CString::new(args.log_dir.to_string_lossy().as_bytes())?;
         unsafe {
             if (self.hcnetsdk.init)() == 0 {
-                bail!("NET_DVR_Init failed (error {})", self.sdk_last_error());
+                bail!(
+                    "NET_DVR_Init failed (error {})",
+                    format_sdk_error(self.sdk_last_error())
+                );
             }
             self.sdk_initialized = true;
 
@@ -674,7 +678,7 @@ impl HikSession {
                 "NET_DVR_Login_V40 failed for {}:{} (error {})",
                 args.ip,
                 args.device_port,
-                self.sdk_last_error()
+                format_sdk_error(self.sdk_last_error())
             );
         }
         Ok(device_info)
@@ -1035,6 +1039,7 @@ impl HikSession {
             target: target.to_string(),
             success: true,
             sdk_error: None,
+            sdk_error_name: None,
             summary: summary.to_string(),
             payload_bytes: summary.len(),
             status_code: None,
@@ -1053,12 +1058,16 @@ impl HikSession {
         target: &str,
         error_message: String,
     ) -> DiscoveryProbeRecord {
+        let sdk_error = extract_sdk_error_code(&error_message);
         DiscoveryProbeRecord {
             category: category.to_string(),
             name: name.to_string(),
             target: target.to_string(),
             success: false,
-            sdk_error: extract_sdk_error_code(&error_message),
+            sdk_error,
+            sdk_error_name: sdk_error
+                .and_then(net_dvr_error_name)
+                .map(std::string::ToString::to_string),
             summary: truncate_for_report(&error_message, 240),
             payload_bytes: error_message.len(),
             status_code: extract_xml_value(&error_message, "statusCode"),
@@ -1084,6 +1093,7 @@ impl HikSession {
                 target: target.to_string(),
                 success: true,
                 sdk_error: None,
+                sdk_error_name: None,
                 summary: summarize_xml_payload(&payload),
                 payload_bytes: payload.len(),
                 status_code: extract_xml_value(&payload, "statusCode"),
@@ -1285,7 +1295,7 @@ impl HikSession {
             )
         };
         if ok == 0 {
-            bail!("SDK error {}", self.sdk_last_error());
+            bail!("SDK error {}", format_sdk_error(self.sdk_last_error()));
         }
         Ok(buffer_to_text(&out, None))
     }
@@ -1329,7 +1339,7 @@ impl HikSession {
             )
         };
         if fallback_ok == 0 {
-            bail!("SDK error {}", self.sdk_last_error());
+            bail!("SDK error {}", format_sdk_error(self.sdk_last_error()));
         }
         Ok(buffer_to_text(&fallback_out, None))
     }
@@ -1369,9 +1379,12 @@ impl HikSession {
         if ok == 0 {
             let status_text = buffer_to_text(&status, None);
             if status_text.is_empty() {
-                bail!("SDK error {}", self.sdk_last_error());
+                bail!("SDK error {}", format_sdk_error(self.sdk_last_error()));
             }
-            bail!("SDK error {} ({status_text})", self.sdk_last_error());
+            bail!(
+                "SDK error {} ({status_text})",
+                format_sdk_error(self.sdk_last_error())
+            );
         }
 
         let mut payload = buffer_to_text(&out, Some(output.returned_xml_size as usize));
@@ -1444,9 +1457,12 @@ impl HikSession {
         if ok == 0 {
             let status_text = buffer_to_text(&status, None);
             if status_text.is_empty() {
-                bail!("SDK error {}", self.sdk_last_error());
+                bail!("SDK error {}", format_sdk_error(self.sdk_last_error()));
             }
-            bail!("SDK error {} ({status_text})", self.sdk_last_error());
+            bail!(
+                "SDK error {} ({status_text})",
+                format_sdk_error(self.sdk_last_error())
+            );
         }
         Ok(out)
     }
@@ -1465,7 +1481,7 @@ impl HikSession {
             )
         };
         if ok == 0 {
-            bail!("SDK error {}", self.sdk_last_error());
+            bail!("SDK error {}", format_sdk_error(self.sdk_last_error()));
         }
         if returned < 20 {
             bail!("short response ({returned} bytes)");
@@ -1523,7 +1539,7 @@ impl HikSession {
         if self.real_handle < 0 {
             bail!(
                 "NET_DVR_RealPlay_V40 failed (error {})",
-                self.sdk_last_error()
+                format_sdk_error(self.sdk_last_error())
             );
         }
         Ok(())
@@ -1619,9 +1635,10 @@ unsafe extern "C" fn real_data_callback(
                 if (ctx.playctrl.open_stream)(port, buffer, buffer_size, ctx.playm4_buffer_bytes)
                     == 0
                 {
+                    let err = (ctx.playctrl.get_last_error)(port);
                     eprintln!(
                         "[RealData] PlayM4_OpenStream failed (err={})",
-                        (ctx.playctrl.get_last_error)(port)
+                        format_playm4_error(err)
                     );
                     (ctx.playctrl.free_port)(port);
                     return;
@@ -1629,18 +1646,20 @@ unsafe extern "C" fn real_data_callback(
                 if (ctx.playctrl.set_dec_callback_mend)(port, Some(dec_data_callback), user_data)
                     == 0
                 {
+                    let err = (ctx.playctrl.get_last_error)(port);
                     eprintln!(
                         "[RealData] PlayM4_SetDecCallBackMend failed (err={})",
-                        (ctx.playctrl.get_last_error)(port)
+                        format_playm4_error(err)
                     );
                     (ctx.playctrl.close_stream)(port);
                     (ctx.playctrl.free_port)(port);
                     return;
                 }
                 if (ctx.playctrl.play)(port, 0) == 0 {
+                    let err = (ctx.playctrl.get_last_error)(port);
                     eprintln!(
                         "[RealData] PlayM4_Play failed (err={})",
-                        (ctx.playctrl.get_last_error)(port)
+                        format_playm4_error(err)
                     );
                     (ctx.playctrl.close_stream)(port);
                     (ctx.playctrl.free_port)(port);
@@ -1667,7 +1686,10 @@ unsafe extern "C" fn real_data_callback(
                     let prev = ctx.last_warn_ms.load(Ordering::Relaxed);
                     if now_ms.saturating_sub(prev) > 1000 {
                         ctx.last_warn_ms.store(now_ms, Ordering::Relaxed);
-                        eprintln!("[RealData] PlayM4_InputData failed (err={err})");
+                        eprintln!(
+                            "[RealData] PlayM4_InputData failed (err={})",
+                            format_playm4_error(err)
+                        );
                     }
                     break;
                 }
@@ -1762,6 +1784,183 @@ fn clamp_u8(v: i32) -> u8 {
         255
     } else {
         v as u8
+    }
+}
+
+fn net_dvr_error_name(code: u32) -> Option<&'static str> {
+    match code {
+        0 => Some("NET_DVR_NOERROR"),
+        1 => Some("NET_DVR_PASSWORD_ERROR"),
+        2 => Some("NET_DVR_NOENOUGHPRI"),
+        3 => Some("NET_DVR_NOINIT"),
+        4 => Some("NET_DVR_CHANNEL_ERROR"),
+        5 => Some("NET_DVR_OVER_MAXLINK"),
+        6 => Some("NET_DVR_VERSIONNOMATCH"),
+        7 => Some("NET_DVR_NETWORK_FAIL_CONNECT"),
+        8 => Some("NET_DVR_NETWORK_SEND_ERROR"),
+        9 => Some("NET_DVR_NETWORK_RECV_ERROR"),
+        10 => Some("NET_DVR_NETWORK_RECV_TIMEOUT"),
+        11 => Some("NET_DVR_NETWORK_ERRORDATA"),
+        12 => Some("NET_DVR_ORDER_ERROR"),
+        13 => Some("NET_DVR_OPERNOPERMIT"),
+        14 => Some("NET_DVR_COMMANDTIMEOUT"),
+        15 => Some("NET_DVR_ERRORSERIALPORT"),
+        16 => Some("NET_DVR_ERRORALARMPORT"),
+        17 => Some("NET_DVR_PARAMETER_ERROR"),
+        18 => Some("NET_DVR_CHAN_EXCEPTION"),
+        19 => Some("NET_DVR_NODISK"),
+        20 => Some("NET_DVR_ERRORDISKNUM"),
+        21 => Some("NET_DVR_DISK_FULL"),
+        22 => Some("NET_DVR_DISK_ERROR"),
+        23 => Some("NET_DVR_NOSUPPORT"),
+        24 => Some("NET_DVR_BUSY"),
+        25 => Some("NET_DVR_MODIFY_FAIL"),
+        26 => Some("NET_DVR_PASSWORD_FORMAT_ERROR"),
+        27 => Some("NET_DVR_DISK_FORMATING"),
+        28 => Some("NET_DVR_DVRNORESOURCE"),
+        29 => Some("NET_DVR_DVROPRATEFAILED"),
+        30 => Some("NET_DVR_OPENHOSTSOUND_FAIL"),
+        31 => Some("NET_DVR_DVRVOICEOPENED"),
+        32 => Some("NET_DVR_TIMEINPUTERROR"),
+        33 => Some("NET_DVR_NOSPECFILE"),
+        34 => Some("NET_DVR_CREATEFILE_ERROR"),
+        35 => Some("NET_DVR_FILEOPENFAIL"),
+        36 => Some("NET_DVR_OPERNOTFINISH"),
+        37 => Some("NET_DVR_GETPLAYTIMEFAIL"),
+        38 => Some("NET_DVR_PLAYFAIL"),
+        39 => Some("NET_DVR_FILEFORMAT_ERROR"),
+        40 => Some("NET_DVR_DIR_ERROR"),
+        41 => Some("NET_DVR_ALLOC_RESOURCE_ERROR"),
+        42 => Some("NET_DVR_AUDIO_MODE_ERROR"),
+        43 => Some("NET_DVR_NOENOUGH_BUF"),
+        44 => Some("NET_DVR_CREATESOCKET_ERROR"),
+        45 => Some("NET_DVR_SETSOCKET_ERROR"),
+        46 => Some("NET_DVR_MAX_NUM"),
+        47 => Some("NET_DVR_USERNOTEXIST"),
+        48 => Some("NET_DVR_WRITEFLASHERROR"),
+        49 => Some("NET_DVR_UPGRADEFAIL"),
+        50 => Some("NET_DVR_CARDHAVEINIT"),
+        51 => Some("NET_DVR_PLAYERFAILED"),
+        52 => Some("NET_DVR_MAX_USERNUM"),
+        53 => Some("NET_DVR_GETLOCALIPANDMACFAIL"),
+        54 => Some("NET_DVR_NOENCODEING"),
+        55 => Some("NET_DVR_IPMISMATCH"),
+        56 => Some("NET_DVR_MACMISMATCH"),
+        57 => Some("NET_DVR_UPGRADELANGMISMATCH"),
+        58 => Some("NET_DVR_MAX_PLAYERPORT"),
+        59 => Some("NET_DVR_NOSPACEBACKUP"),
+        60 => Some("NET_DVR_NODEVICEBACKUP"),
+        61 => Some("NET_DVR_PICTURE_BITS_ERROR"),
+        62 => Some("NET_DVR_PICTURE_DIMENSION_ERROR"),
+        63 => Some("NET_DVR_PICTURE_SIZ_ERROR"),
+        64 => Some("NET_DVR_LOADPLAYERSDKFAILED"),
+        65 => Some("NET_DVR_LOADPLAYERSDKPROC_ERROR"),
+        66 => Some("NET_DVR_LOADDSSDKFAILED"),
+        67 => Some("NET_DVR_LOADDSSDKPROC_ERROR"),
+        68 => Some("NET_DVR_DSSDK_ERROR"),
+        69 => Some("NET_DVR_VOICEMONOPOLIZE"),
+        70 => Some("NET_DVR_JOINMULTICASTFAILED"),
+        71 => Some("NET_DVR_CREATEDIR_ERROR"),
+        72 => Some("NET_DVR_BINDSOCKET_ERROR"),
+        73 => Some("NET_DVR_SOCKETCLOSE_ERROR"),
+        74 => Some("NET_DVR_USERID_ISUSING"),
+        75 => Some("NET_DVR_SOCKETLISTEN_ERROR"),
+        76 => Some("NET_DVR_PROGRAM_EXCEPTION"),
+        77 => Some("NET_DVR_WRITEFILE_FAILED"),
+        78 => Some("NET_DVR_FORMAT_READONLY"),
+        79 => Some("NET_DVR_WITHSAMEUSERNAME"),
+        80 => Some("NET_DVR_DEVICETYPE_ERROR"),
+        81 => Some("NET_DVR_LANGUAGE_ERROR"),
+        82 => Some("NET_DVR_PARAVERSION_ERROR"),
+        83 => Some("NET_DVR_IPCHAN_NOTALIVE"),
+        84 => Some("NET_DVR_RTSP_SDK_ERROR"),
+        85 => Some("NET_DVR_CONVERT_SDK_ERROR"),
+        86 => Some("NET_DVR_IPC_COUNT_OVERFLOW"),
+        87 => Some("NET_DVR_MAX_ADD_NUM"),
+        88 => Some("NET_DVR_PARAMMODE_ERROR"),
+        89 => Some("NET_DVR_CODESPITTER_OFFLINE"),
+        90 => Some("NET_DVR_BACKUP_COPYING"),
+        91 => Some("NET_DVR_CHAN_NOTSUPPORT"),
+        92 => Some("NET_DVR_CALLINEINVALID"),
+        93 => Some("NET_DVR_CALCANCELCONFLICT"),
+        94 => Some("NET_DVR_CALPOINTOUTRANGE"),
+        95 => Some("NET_DVR_FILTERRECTINVALID"),
+        96 => Some("NET_DVR_DDNS_DEVOFFLINE"),
+        97 => Some("NET_DVR_DDNS_INTER_ERROR"),
+        100 => Some("NET_DVR_INTERCOM_SDK_ERROR"),
+        147 => Some("NET_DVR_CERTIFICATE_FILE_ERROR"),
+        148 => Some("NET_DVR_LOAD_SSL_LIB_ERROR"),
+        156 => Some("NET_DVR_LOAD_LIBEAY32_DLL_ERROR"),
+        157 => Some("NET_DVR_LOAD_SSLEAY32_DLL_ERROR"),
+        250 => Some("NET_DVR_ERROR_DEVICE_NOT_ACTIVATED"),
+        251 => Some("NET_DVR_ERROR_RISK_PASSWORD"),
+        252 => Some("NET_DVR_ERROR_DEVICE_HAS_ACTIVATED"),
+        883 => Some("NET_DVR_THERMOMETRY_REGION_OVERSTEP_ERROR"),
+        897 => Some("NET_DVR_NO_TEMP_SENSOR_ERROR"),
+        898 => Some("NET_DVR_PUPIL_DISTANCE_OVERSIZE_ERROR"),
+        1000 => Some("XML_ABILITY_NOTSUPPORT"),
+        1001 => Some("XML_ANALYZE_NOENOUGH_BUF"),
+        1002 => Some("XML_ANALYZE_FIND_LOCALXML_ERROR"),
+        1003 => Some("XML_ANALYZE_LOAD_LOCALXML_ERROR"),
+        1004 => Some("XML_NANLYZE_DVR_DATA_FORMAT_ERROR"),
+        1005 => Some("XML_ANALYZE_TYPE_ERROR"),
+        1006 => Some("XML_ANALYZE_XML_NODE_ERROR"),
+        1007 => Some("XML_INPUT_PARAM_ERROR"),
+        1008 => Some("NET_DVR_ERR_RETURNED_XML_DATA"),
+        _ => None,
+    }
+}
+
+fn format_sdk_error(code: u32) -> String {
+    match net_dvr_error_name(code) {
+        Some(name) => format!("{code} ({name})"),
+        None => code.to_string(),
+    }
+}
+
+fn playm4_error_name(code: u32) -> Option<&'static str> {
+    match code {
+        0 => Some("PLAYM4_NOERROR"),
+        1 => Some("PLAYM4_PARA_OVER"),
+        2 => Some("PLAYM4_ORDER_ERROR"),
+        3 => Some("PLAYM4_TIMER_ERROR"),
+        4 => Some("PLAYM4_DEC_VIDEO_ERROR"),
+        5 => Some("PLAYM4_DEC_AUDIO_ERROR"),
+        6 => Some("PLAYM4_ALLOC_MEMORY_ERROR"),
+        7 => Some("PLAYM4_OPEN_FILE_ERROR"),
+        8 => Some("PLAYM4_CREATE_OBJ_ERROR"),
+        11 => Some("PLAYM4_BUF_OVER"),
+        12 => Some("PLAYM4_CREATE_SOUND_ERROR"),
+        13 => Some("PLAYM4_SET_VOLUME_ERROR"),
+        14 => Some("PLAYM4_SUPPORT_FILE_ONLY"),
+        15 => Some("PLAYM4_SUPPORT_STREAM_ONLY"),
+        16 => Some("PLAYM4_SYS_NOT_SUPPORT"),
+        17 => Some("PLAYM4_FILEHEADER_UNKNOWN"),
+        18 => Some("PLAYM4_VERSION_INCORRECT"),
+        19 => Some("PLAYM4_INIT_DECODER_ERROR"),
+        20 => Some("PLAYM4_CHECK_FILE_ERROR"),
+        21 => Some("PLAYM4_INIT_TIMER_ERROR"),
+        22 => Some("PLAYM4_BLT_ERROR"),
+        24 => Some("PLAYM4_OPEN_FILE_ERROR_MULTI"),
+        25 => Some("PLAYM4_OPEN_FILE_ERROR_VIDEO"),
+        26 => Some("PLAYM4_JPEG_COMPRESS_ERROR"),
+        27 => Some("PLAYM4_EXTRACT_NOT_SUPPORT"),
+        28 => Some("PLAYM4_EXTRACT_DATA_ERROR"),
+        29 => Some("PLAYM4_SECRET_KEY_ERROR"),
+        30 => Some("PLAYM4_DECODE_KEYFRAME_ERROR"),
+        31 => Some("PLAYM4_NEED_MORE_DATA"),
+        32 => Some("PLAYM4_INVALID_PORT"),
+        33 => Some("PLAYM4_NOT_FIND"),
+        34 => Some("PLAYM4_NEED_LARGER_BUFFER"),
+        99 => Some("PLAYM4_FAIL_UNKNOWN"),
+        _ => None,
+    }
+}
+
+fn format_playm4_error(code: u32) -> String {
+    match playm4_error_name(code) {
+        Some(name) => format!("{code} ({name})"),
+        None => code.to_string(),
     }
 }
 
@@ -2142,6 +2341,7 @@ fn discovery_report_to_json(report: &DiscoveryReport) -> String {
             None => out.push_str("null"),
         }
         out.push(',');
+        write_json_opt_string(&mut out, "sdk_error_name", &record.sdk_error_name, true);
         out.push_str(&json_string("summary"));
         out.push(':');
         out.push_str(&json_string(&record.summary));
