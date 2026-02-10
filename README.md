@@ -38,7 +38,10 @@ HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --stream-type 1
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --sdk-root /path/to/another/sdk
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --discover
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --discover --discover-report-dir runtime_logs/discovery_reports
-HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --focus-style SEMIAUTOMATIC --noise-reduction-mode general --digital-zoom 2x --palette WhiteHot
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --focus-style SEMIAUTOMATIC --noise-reduction-mode general --digital-zoom 2x --palette WhiteHot --image-mode standard --scene normal
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --osd-date-time-enabled false --osd-date-display-enabled false --osd-channel-name-enabled false --osd-battery-enabled false
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --osd-snapshot
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --osd-snapshot --osd-date-time-enabled false
 ```
 
 Binary/package name:
@@ -70,7 +73,23 @@ For an **AGM Taipan `TM10-256`** on this test bench, use:
   - `--focus-style` (`AUTO`, `MANUAL`, `SEMIAUTOMATIC`)
   - `--noise-reduction-mode` (`close`, `general`, `advanced`)
   - `--digital-zoom` (`1x`, `2x`, `4x`, `8x`)
-- `--palette` (`WhiteHot`, `BlackHot`, `RedHot`, `Fusion1`)
+  - `--palette` (`WhiteHot`, `BlackHot`, `RedHot`, `Fusion1`)
+  - `--image-mode` (`standard`, `indoor`, `outdoor`, `dimLight`)
+  - `--scene` (free-form string; accepted values are device/firmware-specific)
+- Supported OSD-control CLI options (grouped under `OSD Controls` in `--help`) are:
+  - `--osd-date-time-enabled` (`true|false`)
+  - `--osd-date-display-enabled` (`true|false`)
+  - `--osd-channel-name-enabled` (`true|false`)
+  - `--osd-text-enabled` (`true|false`, applies to all existing text overlay entries)
+  - `--osd-battery-enabled` (`true|false`)
+  - `--osd-device-status-battery-enabled` (`true|false`)
+  - `--osd-device-status-charging-enabled` (`true|false`)
+  - `--osd-device-status-bluetooth-enabled` (`true|false`)
+  - `--osd-device-status-dial-enabled` (`true|false`)
+  - `--osd-ptz-zoom-label` (`2sec|5sec|10sec|alwaysclose|alwaysopen`)
+- OSD snapshot options (grouped under `OSD Snapshot` in `--help`) are:
+  - `--osd-snapshot` (capture OSD endpoint snapshots before and after applying controls)
+  - `--osd-snapshot-dir` (default `runtime_logs/osd_snapshots`)
 - These controls are currently known to work on image channel `1` on the Taipan test unit.
 - Vendor layout is platform-scoped to support future targets:
   - `vendor/linux/x86_64/hik_sdk`

@@ -480,6 +480,17 @@ struct DiscoveryReport {
     records: Vec<DiscoveryProbeRecord>,
 }
 
+#[derive(Clone)]
+struct OsdSnapshotReport {
+    generated_at_ms: u64,
+    stage: String,
+    camera_ip: String,
+    camera_port: u16,
+    channel: i32,
+    sdk_root: String,
+    records: Vec<DiscoveryProbeRecord>,
+}
+
 struct HikSession {
     hcnetsdk: Arc<HcNetSdkApi>,
     playctrl: Arc<PlayCtrlApi>,
@@ -509,7 +520,24 @@ impl HikSession {
         session.configure_init_paths(sdk_lib_dir)?;
         session.init_sdk(args)?;
         let device_info = session.login(args)?;
-        session.apply_requested_image_controls(args)?;
+
+        if args.osd_snapshot {
+            match session.capture_osd_snapshot(args, "before_controls") {
+                Ok(path) => println!("OSD snapshot written to {}", path.display()),
+                Err(err) => eprintln!("OSD snapshot failed (before_controls): {err}"),
+            }
+        }
+
+        let controls_result = session.apply_requested_controls(args);
+
+        if args.osd_snapshot {
+            match session.capture_osd_snapshot(args, "after_controls") {
+                Ok(path) => println!("OSD snapshot written to {}", path.display()),
+                Err(err) => eprintln!("OSD snapshot failed (after_controls): {err}"),
+            }
+        }
+
+        controls_result?;
         if args.discover
             && let Err(err) = session.log_startup_introspection(args, &device_info)
         {
@@ -688,11 +716,19 @@ impl HikSession {
         Ok(device_info)
     }
 
+    fn apply_requested_controls(&self, args: &Args) -> Result<()> {
+        self.apply_requested_image_controls(args)?;
+        self.apply_requested_osd_controls(args)?;
+        Ok(())
+    }
+
     fn apply_requested_image_controls(&self, args: &Args) -> Result<()> {
         if args.focus_style.is_none()
             && args.noise_reduction_mode.is_none()
             && args.digital_zoom.is_none()
             && args.palette.is_none()
+            && args.image_mode.is_none()
+            && args.scene.is_none()
         {
             return Ok(());
         }
@@ -720,6 +756,16 @@ impl HikSession {
         if let Some(palette) = args.palette {
             self.apply_palette(channel, palette)?;
             applied.push(format!("palette={}", palette.as_isapi_value()));
+        }
+
+        if let Some(image_mode) = args.image_mode {
+            self.apply_image_mode(channel, image_mode)?;
+            applied.push(format!("image_mode={}", image_mode.as_isapi_value()));
+        }
+
+        if let Some(scene) = args.scene.as_ref() {
+            self.apply_scene(channel, scene)?;
+            applied.push(format!("scene={scene}"));
         }
 
         if !applied.is_empty() {
@@ -869,6 +915,403 @@ impl HikSession {
             );
         }
         Ok(())
+    }
+
+    fn apply_image_mode(&self, channel: i32, image_mode: ImageModeOption) -> Result<()> {
+        let path = format!("/ISAPI/Image/channels/{channel}");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read image channel config from {path}"))?;
+        let expected = image_mode.as_isapi_value();
+        let updated_xml = replace_xml_tag_value(&current_xml, "ImageMode", expected)
+            .with_context(|| format!("image mode not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write image channel config to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify image channel config from {path}"))?;
+        let actual = extract_xml_value(&verify_xml, "ImageMode").unwrap_or_default();
+        if actual != expected {
+            bail!(
+                "image mode did not stick (expected {}, got {})",
+                expected,
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_scene(&self, channel: i32, scene: &str) -> Result<()> {
+        let path = format!("/ISAPI/Image/channels/{channel}");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read image channel config from {path}"))?;
+
+        let updated_xml = replace_xml_tag_value_in_section(&current_xml, "Scene", "mode", scene)
+            .or_else(|_| replace_xml_tag_value_in_section(&current_xml, "Scene", "scene", scene))
+            .or_else(|_| replace_xml_tag_value(&current_xml, "Scene", scene))
+            .with_context(|| format!("scene setting not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write image channel config to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify image channel config from {path}"))?;
+        let actual = extract_xml_value_in_section(&verify_xml, "Scene", "mode")
+            .or_else(|| extract_xml_value_in_section(&verify_xml, "Scene", "scene"))
+            .or_else(|| extract_xml_value(&verify_xml, "Scene"))
+            .unwrap_or_default();
+        if actual != scene {
+            bail!(
+                "scene setting did not stick (expected {}, got {})",
+                scene,
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_requested_osd_controls(&self, args: &Args) -> Result<()> {
+        if args.osd_date_time_enabled.is_none()
+            && args.osd_date_display_enabled.is_none()
+            && args.osd_channel_name_enabled.is_none()
+            && args.osd_text_enabled.is_none()
+            && args.osd_battery_enabled.is_none()
+            && args.osd_device_status_battery_enabled.is_none()
+            && args.osd_device_status_charging_enabled.is_none()
+            && args.osd_device_status_bluetooth_enabled.is_none()
+            && args.osd_device_status_dial_enabled.is_none()
+            && args.osd_ptz_zoom_label.is_none()
+        {
+            return Ok(());
+        }
+
+        let channel = args.channel.max(1);
+        println!("Applying OSD controls on channel {channel}...");
+        let mut applied = Vec::new();
+
+        if let Some(enabled) = args.osd_date_time_enabled {
+            let path =
+                format!("/ISAPI/System/Video/inputs/channels/{channel}/overlays/dateTimeOverlay");
+            self.apply_bool_setting(&path, None, "enabled", enabled, "DateTimeOverlay.enabled")?;
+            applied.push(format!("date_time_overlay={}", bool_xml_value(enabled)));
+        }
+
+        if let Some(enabled) = args.osd_date_display_enabled {
+            let path =
+                format!("/ISAPI/System/Video/inputs/channels/{channel}/overlays/dateTimeOverlay");
+            self.apply_bool_setting(
+                &path,
+                None,
+                "displayDate",
+                enabled,
+                "DateTimeOverlay.displayDate",
+            )?;
+            applied.push(format!("date_display_overlay={}", bool_xml_value(enabled)));
+        }
+
+        if let Some(enabled) = args.osd_channel_name_enabled {
+            let path = format!(
+                "/ISAPI/System/Video/inputs/channels/{channel}/overlays/channelNameOverlay"
+            );
+            self.apply_bool_setting(
+                &path,
+                None,
+                "enabled",
+                enabled,
+                "channelNameOverlay.enabled",
+            )?;
+            applied.push(format!("channel_name_overlay={}", bool_xml_value(enabled)));
+        }
+
+        if let Some(enabled) = args.osd_battery_enabled {
+            let path = format!(
+                "/ISAPI/System/Video/inputs/channels/{channel}/overlays/BatteryPowerOverlay"
+            );
+            self.apply_bool_setting(
+                &path,
+                None,
+                "enabled",
+                enabled,
+                "BatteryPowerOverlay.enabled",
+            )?;
+            applied.push(format!("battery_overlay={}", bool_xml_value(enabled)));
+        }
+
+        if let Some(enabled) = args.osd_text_enabled {
+            let count = self.apply_text_overlays_enabled(channel, enabled)?;
+            applied.push(format!(
+                "text_overlay={} ({} item{})",
+                bool_xml_value(enabled),
+                count,
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+
+        let overlays_path = format!("/ISAPI/System/Video/inputs/channels/{channel}/overlays");
+        if let Some(enabled) = args.osd_device_status_battery_enabled {
+            self.apply_bool_setting(
+                &overlays_path,
+                Some("DeviceStatusDisplay"),
+                "batteryCapacityDisplay",
+                enabled,
+                "DeviceStatusDisplay.batteryCapacityDisplay",
+            )?;
+            applied.push(format!("device_status_battery={}", bool_xml_value(enabled)));
+        }
+        if let Some(enabled) = args.osd_device_status_charging_enabled {
+            self.apply_bool_setting(
+                &overlays_path,
+                Some("DeviceStatusDisplay"),
+                "chargingStatusDisplay",
+                enabled,
+                "DeviceStatusDisplay.chargingStatusDisplay",
+            )?;
+            applied.push(format!(
+                "device_status_charging={}",
+                bool_xml_value(enabled)
+            ));
+        }
+        if let Some(enabled) = args.osd_device_status_bluetooth_enabled {
+            self.apply_bool_setting(
+                &overlays_path,
+                Some("DeviceStatusDisplay"),
+                "bluetoothStatusDisplay",
+                enabled,
+                "DeviceStatusDisplay.bluetoothStatusDisplay",
+            )?;
+            applied.push(format!(
+                "device_status_bluetooth={}",
+                bool_xml_value(enabled)
+            ));
+        }
+        if let Some(enabled) = args.osd_device_status_dial_enabled {
+            self.apply_bool_setting(
+                &overlays_path,
+                Some("DeviceStatusDisplay"),
+                "dialStatusDisplay",
+                enabled,
+                "DeviceStatusDisplay.dialStatusDisplay",
+            )?;
+            applied.push(format!("device_status_dial={}", bool_xml_value(enabled)));
+        }
+
+        if let Some(mode) = args.osd_ptz_zoom_label {
+            self.apply_ptz_zoom_label(channel, mode)?;
+            applied.push(format!("ptz_zoom_label={}", mode.as_isapi_value()));
+        }
+
+        if !applied.is_empty() {
+            println!("  osd_control: {}", applied.join(", "));
+        }
+        Ok(())
+    }
+
+    fn apply_bool_setting(
+        &self,
+        path: &str,
+        section_tag: Option<&str>,
+        target_tag: &str,
+        enabled: bool,
+        setting_name: &str,
+    ) -> Result<()> {
+        let current_xml = self
+            .query_isapi_xml(path)
+            .with_context(|| format!("failed to read {setting_name} from {path}"))?;
+        let expected = bool_xml_value(enabled);
+        let updated_xml = if let Some(section) = section_tag {
+            replace_xml_tag_value_in_section(&current_xml, section, target_tag, expected)
+                .with_context(|| format!("{setting_name} not exposed at {path}"))?
+        } else {
+            replace_xml_tag_value(&current_xml, target_tag, expected)
+                .with_context(|| format!("{setting_name} not exposed at {path}"))?
+        };
+
+        let response = self
+            .put_isapi_xml(path, &updated_xml)
+            .with_context(|| format!("failed to write {setting_name} to {path}"))?;
+        ensure_isapi_response_ok("PUT", path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(path)
+            .with_context(|| format!("failed to verify {setting_name} from {path}"))?;
+        let actual = if let Some(section) = section_tag {
+            extract_xml_value_in_section(&verify_xml, section, target_tag)
+        } else {
+            extract_xml_value(&verify_xml, target_tag)
+        }
+        .unwrap_or_default();
+        if actual != expected {
+            bail!(
+                "{setting_name} did not stick (expected {}, got {})",
+                expected,
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_text_overlays_enabled(&self, channel: i32, enabled: bool) -> Result<usize> {
+        let path = format!("/ISAPI/System/Video/inputs/channels/{channel}/overlays/text");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read text overlays from {path}"))?;
+        let expected = bool_xml_value(enabled);
+        let (updated_xml, count) =
+            replace_xml_tag_value_in_all_sections(&current_xml, "TextOverlay", "enabled", expected)
+                .with_context(|| format!("text overlay entries not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write text overlays to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify text overlays from {path}"))?;
+        let values = extract_xml_values_in_sections(&verify_xml, "TextOverlay", "enabled");
+        if values.is_empty() {
+            bail!("text overlay verification failed: no <TextOverlay><enabled> values returned");
+        }
+        if values.iter().any(|v| v != expected) {
+            bail!(
+                "text overlay enabled state did not stick for all entries (expected {}, got {})",
+                expected,
+                values.join(",")
+            );
+        }
+        Ok(count)
+    }
+
+    fn apply_ptz_zoom_label(&self, channel: i32, mode: PtzZoomLabelOption) -> Result<()> {
+        let path = format!("/ISAPI/PTZCtrl/channels/{channel}/PTZOSDDisplay");
+        let current_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to read PTZ OSD settings from {path}"))?;
+        let expected = mode.as_isapi_value();
+        let updated_xml = replace_xml_tag_value(&current_xml, "zoomlable", expected)
+            .or_else(|_| replace_xml_tag_value(&current_xml, "zoomLabel", expected))
+            .with_context(|| format!("zoom label OSD setting not exposed at {path}"))?;
+
+        let response = self
+            .put_isapi_xml(&path, &updated_xml)
+            .with_context(|| format!("failed to write PTZ OSD settings to {path}"))?;
+        ensure_isapi_response_ok("PUT", &path, &response)?;
+
+        let verify_xml = self
+            .query_isapi_xml(&path)
+            .with_context(|| format!("failed to verify PTZ OSD settings from {path}"))?;
+        let actual = extract_xml_value(&verify_xml, "zoomlable")
+            .or_else(|| extract_xml_value(&verify_xml, "zoomLabel"))
+            .unwrap_or_default();
+        if actual != expected {
+            bail!(
+                "PTZ zoom-label OSD mode did not stick (expected {}, got {})",
+                expected,
+                if actual.is_empty() {
+                    "<missing>"
+                } else {
+                    &actual
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn capture_osd_snapshot(&self, args: &Args, stage: &str) -> Result<PathBuf> {
+        let channel = args.channel.max(1);
+        let report = OsdSnapshotReport {
+            generated_at_ms: unix_millis(),
+            stage: stage.to_string(),
+            camera_ip: args.ip.clone(),
+            camera_port: args.device_port,
+            channel,
+            sdk_root: args
+                .sdk_root
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_string()),
+            records: self.collect_osd_snapshot_records(channel),
+        };
+        self.write_osd_snapshot_report_json(args, &report)
+    }
+
+    fn collect_osd_snapshot_records(&self, channel: i32) -> Vec<DiscoveryProbeRecord> {
+        let mut records = Vec::new();
+        for (name, path) in osd_snapshot_paths(channel) {
+            let mut record = Self::discovery_probe_from_text_result(
+                "osd_snapshot",
+                &name,
+                &path,
+                self.query_isapi_xml(&path),
+            );
+            Self::mark_record_failed_on_response_status(&mut record);
+            records.push(record);
+        }
+        records
+    }
+
+    fn mark_record_failed_on_response_status(record: &mut DiscoveryProbeRecord) {
+        if !record.success {
+            return;
+        }
+        let Some(code) = record.status_code.as_deref() else {
+            return;
+        };
+        if code == "0" || code == "1" {
+            return;
+        }
+
+        record.success = false;
+        let status = record.status_string.as_deref().unwrap_or("<missing>");
+        let sub = record.sub_status_code.as_deref().unwrap_or("<missing>");
+        record.summary = format!("statusCode={code} statusString={status} subStatusCode={sub}");
+        if record.error_text.is_none() {
+            record.error_text = Some(record.payload_sample.clone());
+        }
+    }
+
+    fn write_osd_snapshot_report_json(
+        &self,
+        args: &Args,
+        report: &OsdSnapshotReport,
+    ) -> Result<PathBuf> {
+        std::fs::create_dir_all(&args.osd_snapshot_dir).with_context(|| {
+            format!(
+                "failed to create OSD snapshot dir {}",
+                args.osd_snapshot_dir.display()
+            )
+        })?;
+        let filename = format!(
+            "osd_snapshot_{}_{}_{}_{}.json",
+            sanitize_filename_token(&args.ip),
+            args.device_port,
+            sanitize_filename_token(&report.stage),
+            report.generated_at_ms
+        );
+        let path = args.osd_snapshot_dir.join(filename);
+        std::fs::write(&path, osd_snapshot_report_to_json(report))
+            .with_context(|| format!("failed to write OSD snapshot report {}", path.display()))?;
+        Ok(path)
     }
 
     fn log_startup_introspection(
@@ -2179,6 +2622,10 @@ fn bool_u8_text(v: u8) -> &'static str {
     }
 }
 
+fn bool_xml_value(v: bool) -> &'static str {
+    if v { "true" } else { "false" }
+}
+
 fn c_byte_array_to_string(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).trim().to_string()
@@ -2371,6 +2818,21 @@ fn extract_xml_value_in_section(text: &str, section_tag: &str, target_tag: &str)
     Some(section[value_start..value_end].trim().to_string())
 }
 
+fn extract_xml_values_in_sections(text: &str, section_tag: &str, target_tag: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut search_start = 0;
+    while let Some((section_value_start, section_value_end, section_close_end)) =
+        find_xml_tag_bounds(text, section_tag, search_start)
+    {
+        let section = &text[section_value_start..section_value_end];
+        if let Some((value_start, value_end, _)) = find_xml_tag_bounds(section, target_tag, 0) {
+            values.push(section[value_start..value_end].trim().to_string());
+        }
+        search_start = section_close_end;
+    }
+    values
+}
+
 fn ensure_isapi_response_ok(method: &str, path: &str, payload: &str) -> Result<()> {
     if let Some(code) = extract_xml_value(payload, "statusCode")
         && code != "1"
@@ -2417,6 +2879,38 @@ fn find_xml_tag_bounds(text: &str, tag: &str, start_idx: usize) -> Option<(usize
     None
 }
 
+fn find_xml_section_bounds(
+    text: &str,
+    section_tag: &str,
+    start_idx: usize,
+) -> Option<(usize, usize)> {
+    let open_prefix = format!("<{section_tag}");
+    let close = format!("</{section_tag}>");
+    let mut search_start = start_idx.min(text.len());
+
+    while let Some(rel_idx) = text[search_start..].find(&open_prefix) {
+        let section_start = search_start + rel_idx;
+        let after_tag = section_start + open_prefix.len();
+        let next = text.as_bytes().get(after_tag).copied();
+        let valid_boundary = matches!(
+            next,
+            Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+        );
+        if !valid_boundary {
+            search_start = after_tag;
+            continue;
+        }
+
+        let open_end_rel = text[after_tag..].find('>')?;
+        let section_content_start = after_tag + open_end_rel + 1;
+        let section_close_rel = text[section_content_start..].find(&close)?;
+        let section_end = section_content_start + section_close_rel + close.len();
+        return Some((section_start, section_end));
+    }
+
+    None
+}
+
 fn replace_xml_tag_value(xml: &str, tag: &str, value: &str) -> Result<String> {
     let (value_start, value_end, _) =
         find_xml_tag_bounds(xml, tag, 0).ok_or_else(|| anyhow!("tag <{tag}> not found"))?;
@@ -2452,6 +2946,36 @@ fn replace_xml_tag_value_in_section(
     out.push_str(&replaced_section);
     out.push_str(&xml[section_end..]);
     Ok(out)
+}
+
+fn replace_xml_tag_value_in_all_sections(
+    xml: &str,
+    section_tag: &str,
+    target_tag: &str,
+    value: &str,
+) -> Result<(String, usize)> {
+    let mut out = String::with_capacity(xml.len() + value.len());
+    let mut cursor = 0;
+    let mut count = 0;
+
+    while let Some((section_start, section_end)) = find_xml_section_bounds(xml, section_tag, cursor)
+    {
+        out.push_str(&xml[cursor..section_start]);
+        let section_xml = &xml[section_start..section_end];
+        let replaced_section =
+            replace_xml_tag_value(section_xml, target_tag, value).with_context(|| {
+                format!("tag <{target_tag}> not found inside <{section_tag}> section")
+            })?;
+        out.push_str(&replaced_section);
+        cursor = section_end;
+        count += 1;
+    }
+
+    out.push_str(&xml[cursor..]);
+    if count == 0 {
+        bail!("section <{section_tag}> not found");
+    }
+    Ok((out, count))
 }
 
 fn extract_sdk_error_code(text: &str) -> Option<u32> {
@@ -2661,6 +3185,92 @@ fn discovery_report_to_json(report: &DiscoveryReport) -> String {
     out
 }
 
+fn osd_snapshot_report_to_json(report: &OsdSnapshotReport) -> String {
+    let mut out = String::new();
+    out.push('{');
+    out.push_str(&json_string("generated_at_ms"));
+    out.push(':');
+    out.push_str(&report.generated_at_ms.to_string());
+    out.push(',');
+    out.push_str(&json_string("stage"));
+    out.push(':');
+    out.push_str(&json_string(&report.stage));
+    out.push(',');
+    out.push_str(&json_string("camera_ip"));
+    out.push(':');
+    out.push_str(&json_string(&report.camera_ip));
+    out.push(',');
+    out.push_str(&json_string("camera_port"));
+    out.push(':');
+    out.push_str(&report.camera_port.to_string());
+    out.push(',');
+    out.push_str(&json_string("channel"));
+    out.push(':');
+    out.push_str(&report.channel.to_string());
+    out.push(',');
+    out.push_str(&json_string("sdk_root"));
+    out.push(':');
+    out.push_str(&json_string(&report.sdk_root));
+    out.push(',');
+
+    out.push_str(&json_string("records"));
+    out.push(':');
+    out.push('[');
+    for (idx, record) in report.records.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        out.push_str(&json_string("category"));
+        out.push(':');
+        out.push_str(&json_string(&record.category));
+        out.push(',');
+        out.push_str(&json_string("name"));
+        out.push(':');
+        out.push_str(&json_string(&record.name));
+        out.push(',');
+        out.push_str(&json_string("target"));
+        out.push(':');
+        out.push_str(&json_string(&record.target));
+        out.push(',');
+        out.push_str(&json_string("success"));
+        out.push(':');
+        out.push_str(if record.success { "true" } else { "false" });
+        out.push(',');
+        out.push_str(&json_string("sdk_error"));
+        out.push(':');
+        match record.sdk_error {
+            Some(v) => out.push_str(&v.to_string()),
+            None => out.push_str("null"),
+        }
+        out.push(',');
+        write_json_opt_string(&mut out, "sdk_error_name", &record.sdk_error_name, true);
+        out.push_str(&json_string("summary"));
+        out.push(':');
+        out.push_str(&json_string(&record.summary));
+        out.push(',');
+        out.push_str(&json_string("payload_bytes"));
+        out.push(':');
+        out.push_str(&record.payload_bytes.to_string());
+        out.push(',');
+        write_json_opt_string(&mut out, "status_code", &record.status_code, true);
+        write_json_opt_string(&mut out, "status_string", &record.status_string, true);
+        write_json_opt_string(&mut out, "sub_status_code", &record.sub_status_code, true);
+        write_json_string_array(&mut out, "tags", &record.tags, true);
+        write_json_string_array(&mut out, "hints", &record.hints, true);
+        out.push_str(&json_string("payload_sample"));
+        out.push(':');
+        out.push_str(&json_string(&record.payload_sample));
+        out.push(',');
+        write_json_opt_string(&mut out, "error_text", &record.error_text, false);
+        out.push('}');
+    }
+    out.push(']');
+    out.push('}');
+    out.push('\n');
+    out
+}
+
 fn targeted_sweep_paths(channel: i32) -> Vec<(String, String, String)> {
     let mut channels = Vec::new();
     for ch in [channel.max(1), 1, 2] {
@@ -2771,6 +3381,60 @@ fn targeted_sweep_paths(channel: i32) -> Vec<(String, String, String)> {
         }
     }
     out
+}
+
+fn osd_snapshot_paths(channel: i32) -> Vec<(String, String)> {
+    let ch = channel.max(1);
+    vec![
+        (
+            "overlays".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays"),
+        ),
+        (
+            "overlays_capabilities".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays/capabilities"),
+        ),
+        (
+            "overlay_datetime".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays/dateTimeOverlay"),
+        ),
+        (
+            "overlay_datetime_capabilities".to_string(),
+            format!(
+                "/ISAPI/System/Video/inputs/channels/{ch}/overlays/dateTimeOverlay/capabilities"
+            ),
+        ),
+        (
+            "overlay_channel_name".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays/channelNameOverlay"),
+        ),
+        (
+            "overlay_battery_power".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays/BatteryPowerOverlay"),
+        ),
+        (
+            "overlay_battery_power_capabilities".to_string(),
+            format!(
+                "/ISAPI/System/Video/inputs/channels/{ch}/overlays/BatteryPowerOverlay/capabilities"
+            ),
+        ),
+        (
+            "overlay_text_list".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays/text"),
+        ),
+        (
+            "overlay_text_1".to_string(),
+            format!("/ISAPI/System/Video/inputs/channels/{ch}/overlays/text/1"),
+        ),
+        (
+            "osd_language".to_string(),
+            "/ISAPI/System/Video/inputs/OSDLanguage".to_string(),
+        ),
+        (
+            "ptz_osd_display".to_string(),
+            format!("/ISAPI/PTZCtrl/channels/{ch}/PTZOSDDisplay"),
+        ),
+    ]
 }
 
 fn read_u32_le(buf: &[u8], offset: usize) -> Option<u32> {
@@ -3186,6 +3850,55 @@ impl PaletteOption {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ImageModeOption {
+    #[value(name = "standard")]
+    Standard,
+    #[value(name = "indoor")]
+    Indoor,
+    #[value(name = "outdoor")]
+    Outdoor,
+    #[value(name = "dimLight")]
+    DimLight,
+}
+
+impl ImageModeOption {
+    fn as_isapi_value(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Indoor => "indoor",
+            Self::Outdoor => "outdoor",
+            Self::DimLight => "dimLight",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PtzZoomLabelOption {
+    #[value(name = "2sec")]
+    Sec2,
+    #[value(name = "5sec")]
+    Sec5,
+    #[value(name = "10sec")]
+    Sec10,
+    #[value(name = "alwaysclose")]
+    AlwaysClose,
+    #[value(name = "alwaysopen")]
+    AlwaysOpen,
+}
+
+impl PtzZoomLabelOption {
+    fn as_isapi_value(self) -> &'static str {
+        match self {
+            Self::Sec2 => "2sec",
+            Self::Sec5 => "5sec",
+            Self::Sec10 => "10sec",
+            Self::AlwaysClose => "alwaysclose",
+            Self::AlwaysOpen => "alwaysopen",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "hikvision-thermal-wayland-viewer")]
 #[command(about = "Minimal Hikvision viewer in Rust (Wayland-only rendering path).")]
@@ -3210,6 +3923,38 @@ struct Args {
     digital_zoom: Option<DigitalZoomOption>,
     #[arg(long, value_enum, ignore_case = true)]
     palette: Option<PaletteOption>,
+    #[arg(long, value_enum, ignore_case = true)]
+    image_mode: Option<ImageModeOption>,
+    #[arg(long)]
+    scene: Option<String>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_date_time_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_date_display_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_channel_name_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_text_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_battery_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_device_status_battery_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_device_status_charging_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_device_status_bluetooth_enabled: Option<bool>,
+    #[arg(long, help_heading = "OSD Controls")]
+    osd_device_status_dial_enabled: Option<bool>,
+    #[arg(long, value_enum, ignore_case = true, help_heading = "OSD Controls")]
+    osd_ptz_zoom_label: Option<PtzZoomLabelOption>,
+    #[arg(long, default_value_t = false, help_heading = "OSD Snapshot")]
+    osd_snapshot: bool,
+    #[arg(
+        long,
+        default_value = "runtime_logs/osd_snapshots",
+        help_heading = "OSD Snapshot"
+    )]
+    osd_snapshot_dir: PathBuf,
     #[arg(long, default_value_t = 0)]
     stream_type: u32,
     #[arg(long, default_value_t = 0)]
