@@ -31,6 +31,27 @@ const NET_SDK_INIT_CFG_SDK_PATH: i32 = 2;
 const NET_SDK_INIT_CFG_LIBEAY_PATH: i32 = 3;
 const NET_SDK_INIT_CFG_SSLEAY_PATH: i32 = 4;
 
+const NET_DVR_GET_IPPARACFG_V40: Dword = 1062;
+
+const NET_DVR_GET_THERMOMETRY_BASICPARAM: Dword = 3621;
+const NET_DVR_GET_THERMAL_CAPABILITIES: Dword = 3634;
+const NET_DVR_GET_STREAMING_CAPABILITIES: Dword = 3712;
+const NET_DVR_GET_PANORAMAIMAGE_CAPABILITIES: Dword = 3746;
+const NET_DVR_GET_PREVIEW_MODE_CAPABILITIES: Dword = 3983;
+const NET_DVR_GET_MANUALTHERM_CAPABILITIES: Dword = 6707;
+const NET_DVR_GET_THERMINTELL_CAPABILITIES: Dword = 6711;
+const NET_DVR_GET_THERMOMETRY_MODE: Dword = 6765;
+const NET_DVR_GET_THERMAL_PIP: Dword = 6768;
+
+const NET_DVR_GET_THERMOMETRY_BASICPARAM_CAPABILITIES: Dword = 3620;
+const NET_DVR_GET_THERMOMETRY_MODE_CAPABILITIES: Dword = 6764;
+const NET_DVR_GET_THERMAL_PIP_CAPABILITIES: Dword = 6767;
+
+const DEVICE_NETWORK_ABILITY: Dword = 0x002;
+const DEVICE_ABILITY_INFO: Dword = 0x011;
+const STREAM_ABILITY: Dword = 0x012;
+const SYSTEM_MANAGEMENT_ABILITY: Dword = 0x013;
+
 const STREAME_REALTIME: u32 = 0;
 const PLAYM4_BUF_OVER: u32 = 11;
 const T_YV12: i32 = 3;
@@ -165,6 +186,70 @@ struct FrameInfo {
     frame_num: u32,
 }
 
+#[repr(C)]
+struct NetDvrStdAbility {
+    cond_buffer: *mut c_void,
+    cond_size: Dword,
+    out_buffer: *mut c_void,
+    out_size: Dword,
+    status_buffer: *mut c_void,
+    status_size: Dword,
+    ret_size: Dword,
+    res: [Byte; 32],
+}
+
+#[repr(C)]
+struct NetDvrStdConfig {
+    cond_buffer: *mut c_void,
+    cond_size: Dword,
+    in_buffer: *mut c_void,
+    in_size: Dword,
+    out_buffer: *mut c_void,
+    out_size: Dword,
+    status_buffer: *mut c_void,
+    status_size: Dword,
+    xml_buffer: *mut c_void,
+    xml_size: Dword,
+    data_type: Byte,
+    res: [Byte; 23],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NetDvrThermometryCond {
+    size: Dword,
+    channel: Dword,
+    preset_no: Word,
+    res: [Byte; 62],
+}
+
+#[repr(C)]
+struct NetDvrXmlConfigInput {
+    size: Dword,
+    request_url: *mut c_void,
+    request_url_len: Dword,
+    in_buffer: *mut c_void,
+    in_buffer_size: Dword,
+    recv_timeout: Dword,
+    force_encrypt: Byte,
+    num_of_multipart: Byte,
+    mime_type: Byte,
+    res: [Byte; 29],
+}
+
+#[repr(C)]
+struct NetDvrXmlConfigOutput {
+    size: Dword,
+    out_buffer: *mut c_void,
+    out_buffer_size: Dword,
+    returned_xml_size: Dword,
+    status_buffer: *mut c_void,
+    status_size: Dword,
+    data_buffer: *mut c_void,
+    num_of_multipart: Byte,
+    res: [Byte; 23],
+}
+
 type RealDataCallback = Option<
     unsafe extern "C" fn(
         real_handle: Long,
@@ -199,6 +284,14 @@ type NetDvrRealPlayV40 =
     unsafe extern "C" fn(Long, *const NetDvrPreviewInfo, RealDataCallback, *mut c_void) -> Long;
 type NetDvrStopRealPlay = unsafe extern "C" fn(Long) -> Bool;
 type NetDvrGetLastError = unsafe extern "C" fn() -> Dword;
+type NetDvrGetDvrConfig =
+    unsafe extern "C" fn(Long, Dword, Long, *mut c_void, Dword, *mut Dword) -> Bool;
+type NetDvrGetDeviceAbility =
+    unsafe extern "C" fn(Long, Dword, *mut c_char, Dword, *mut c_char, Dword) -> Bool;
+type NetDvrGetStdAbility = unsafe extern "C" fn(Long, Dword, *mut NetDvrStdAbility) -> Bool;
+type NetDvrGetStdConfig = unsafe extern "C" fn(Long, Dword, *mut NetDvrStdConfig) -> Bool;
+type NetDvrStdXmlConfig =
+    unsafe extern "C" fn(Long, *mut NetDvrXmlConfigInput, *mut NetDvrXmlConfigOutput) -> Bool;
 
 type PlayM4GetPort = unsafe extern "C" fn(*mut i32) -> i32;
 type PlayM4FreePort = unsafe extern "C" fn(i32) -> i32;
@@ -224,6 +317,11 @@ struct HcNetSdkApi {
     real_play_v40: NetDvrRealPlayV40,
     stop_real_play: NetDvrStopRealPlay,
     get_last_error: NetDvrGetLastError,
+    get_dvr_config: NetDvrGetDvrConfig,
+    get_device_ability: NetDvrGetDeviceAbility,
+    get_std_ability: NetDvrGetStdAbility,
+    get_std_config: NetDvrGetStdConfig,
+    std_xml_config: NetDvrStdXmlConfig,
 }
 
 impl HcNetSdkApi {
@@ -243,6 +341,11 @@ impl HcNetSdkApi {
                 real_play_v40: *lib.get(b"NET_DVR_RealPlay_V40\0")?,
                 stop_real_play: *lib.get(b"NET_DVR_StopRealPlay\0")?,
                 get_last_error: *lib.get(b"NET_DVR_GetLastError\0")?,
+                get_dvr_config: *lib.get(b"NET_DVR_GetDVRConfig\0")?,
+                get_device_ability: *lib.get(b"NET_DVR_GetDeviceAbility\0")?,
+                get_std_ability: *lib.get(b"NET_DVR_GetSTDAbility\0")?,
+                get_std_config: *lib.get(b"NET_DVR_GetSTDConfig\0")?,
+                std_xml_config: *lib.get(b"NET_DVR_STDXMLConfig\0")?,
                 _lib: lib,
             })
         }
@@ -341,6 +444,38 @@ struct CallbackContext {
     last_warn_ms: AtomicU64,
 }
 
+#[derive(Clone)]
+struct DiscoveryProbeRecord {
+    category: String,
+    name: String,
+    target: String,
+    success: bool,
+    sdk_error: Option<u32>,
+    summary: String,
+    payload_bytes: usize,
+    status_code: Option<String>,
+    status_string: Option<String>,
+    sub_status_code: Option<String>,
+    tags: Vec<String>,
+    hints: Vec<String>,
+    payload_sample: String,
+    error_text: Option<String>,
+}
+
+#[derive(Clone)]
+struct DiscoveryReport {
+    generated_at_ms: u64,
+    camera_ip: String,
+    camera_port: u16,
+    channel: i32,
+    sdk_root: String,
+    login_serial: String,
+    login_device_type: u16,
+    login_analog_channels: u8,
+    login_ip_channels_max: u32,
+    records: Vec<DiscoveryProbeRecord>,
+}
+
 struct HikSession {
     hcnetsdk: Arc<HcNetSdkApi>,
     playctrl: Arc<PlayCtrlApi>,
@@ -369,7 +504,12 @@ impl HikSession {
 
         session.configure_init_paths(sdk_lib_dir)?;
         session.init_sdk(args)?;
-        session.login(args)?;
+        let device_info = session.login(args)?;
+        if args.discover
+            && let Err(err) = session.log_startup_introspection(args, &device_info)
+        {
+            eprintln!("Discovery failed: {err}");
+        }
         session.start_preview(args, latest_frame)?;
         Ok(session)
     }
@@ -452,7 +592,7 @@ impl HikSession {
         Ok(())
     }
 
-    fn login(&mut self, args: &Args) -> Result<()> {
+    fn login(&mut self, args: &Args) -> Result<NetDvrDeviceInfoV40> {
         let mut login = NetDvrUserLoginInfo {
             device_address: [0; 129],
             use_transport: 0,
@@ -537,7 +677,805 @@ impl HikSession {
                 self.sdk_last_error()
             );
         }
+        Ok(device_info)
+    }
+
+    fn log_startup_introspection(
+        &self,
+        args: &Args,
+        device_info: &NetDvrDeviceInfoV40,
+    ) -> Result<()> {
+        println!(
+            "SDK introspection summary (camera {}:{}):",
+            args.ip, args.device_port
+        );
+        self.log_login_device_summary(device_info);
+        self.log_device_ability_summary();
+        self.log_stream_topology_summary();
+        self.log_std_capability_summary(args.channel);
+        self.log_thermal_config_summary(args.channel);
+        self.log_isapi_surface_summary();
+
+        let records = self.collect_discovery_records(args);
+        let report = self.build_discovery_report(args, device_info, records);
+        let report_path = self.write_discovery_report_json(args, &report)?;
+        println!("Discovery report written to {}", report_path.display());
+        println!("SDK introspection summary complete.");
         Ok(())
+    }
+
+    fn log_login_device_summary(&self, device_info: &NetDvrDeviceInfoV40) {
+        let v30 = &device_info.device_v30;
+        let serial = c_byte_array_to_string(&v30.serial_number);
+        let serial_display = if serial.is_empty() {
+            "<empty>".to_string()
+        } else {
+            serial
+        };
+        let ip_channel_max = v30.ip_chan_num as u32 + ((v30.high_dchan_num as u32) << 8);
+        let stdxml_supported = (v30.support4 & 0x02) != 0;
+
+        println!(
+            "  login_device: serial={} dev_type={} analog_chans={} ip_chans_max={} start_chan={} start_dchan={} main_proto={} sub_proto={} stdxml_supported={} stream_encrypt_supported={}",
+            serial_display,
+            v30.dev_type,
+            v30.chan_num,
+            ip_channel_max,
+            v30.start_chan,
+            v30.start_dchan,
+            stream_proto_name(v30.main_proto),
+            stream_proto_name(v30.sub_proto),
+            yes_no(stdxml_supported),
+            yes_no(device_info.support_stream_encrypt != 0),
+        );
+    }
+
+    fn build_discovery_report(
+        &self,
+        args: &Args,
+        device_info: &NetDvrDeviceInfoV40,
+        records: Vec<DiscoveryProbeRecord>,
+    ) -> DiscoveryReport {
+        let v30 = &device_info.device_v30;
+        DiscoveryReport {
+            generated_at_ms: unix_millis(),
+            camera_ip: args.ip.clone(),
+            camera_port: args.device_port,
+            channel: args.channel,
+            sdk_root: args
+                .sdk_root
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_string()),
+            login_serial: c_byte_array_to_string(&v30.serial_number),
+            login_device_type: v30.dev_type,
+            login_analog_channels: v30.chan_num,
+            login_ip_channels_max: v30.ip_chan_num as u32 + ((v30.high_dchan_num as u32) << 8),
+            records,
+        }
+    }
+
+    fn write_discovery_report_json(
+        &self,
+        args: &Args,
+        report: &DiscoveryReport,
+    ) -> Result<PathBuf> {
+        std::fs::create_dir_all(&args.discover_report_dir).with_context(|| {
+            format!(
+                "failed to create discovery report dir {}",
+                args.discover_report_dir.display()
+            )
+        })?;
+        let filename = format!(
+            "discovery_{}_{}_{}.json",
+            sanitize_filename_token(&args.ip),
+            args.device_port,
+            report.generated_at_ms
+        );
+        let path = args.discover_report_dir.join(filename);
+        std::fs::write(&path, discovery_report_to_json(report))
+            .with_context(|| format!("failed to write discovery report {}", path.display()))?;
+        Ok(path)
+    }
+
+    fn collect_discovery_records(&self, args: &Args) -> Vec<DiscoveryProbeRecord> {
+        let mut records = Vec::new();
+        let thermal_cond = build_thermometry_cond_bytes(args.channel);
+
+        for (name, ability_type) in [
+            ("device_ability_info", DEVICE_ABILITY_INFO),
+            ("device_network_ability", DEVICE_NETWORK_ABILITY),
+            ("stream_ability", STREAM_ABILITY),
+            ("system_management_ability", SYSTEM_MANAGEMENT_ABILITY),
+        ] {
+            records.push(Self::discovery_probe_from_text_result(
+                "device_ability",
+                name,
+                &format!("ability_type=0x{ability_type:x}"),
+                self.query_device_ability_xml(ability_type),
+            ));
+        }
+
+        match self.query_ipparacfg_v40_summary() {
+            Ok((group_num, analog_num, digital_num, start_dchan, returned_bytes)) => {
+                let summary = format!(
+                    "groups={group_num} analog_chans={analog_num} digital_chans={digital_num} start_dchan={start_dchan} payload_bytes={returned_bytes}"
+                );
+                records.push(Self::discovery_probe_custom_success(
+                    "stream_topology",
+                    "ipparacfg_v40",
+                    "NET_DVR_GET_IPPARACFG_V40",
+                    &summary,
+                ));
+            }
+            Err(err) => records.push(Self::discovery_probe_error(
+                "stream_topology",
+                "ipparacfg_v40",
+                "NET_DVR_GET_IPPARACFG_V40",
+                err.to_string(),
+            )),
+        }
+
+        for (name, ability_type, needs_channel_cond) in [
+            (
+                "streaming_capabilities",
+                NET_DVR_GET_STREAMING_CAPABILITIES,
+                false,
+            ),
+            (
+                "preview_mode_capabilities",
+                NET_DVR_GET_PREVIEW_MODE_CAPABILITIES,
+                false,
+            ),
+            (
+                "thermal_capabilities",
+                NET_DVR_GET_THERMAL_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermometry_basicparam_capabilities",
+                NET_DVR_GET_THERMOMETRY_BASICPARAM_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermometry_mode_capabilities",
+                NET_DVR_GET_THERMOMETRY_MODE_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermal_pip_capabilities",
+                NET_DVR_GET_THERMAL_PIP_CAPABILITIES,
+                true,
+            ),
+            (
+                "manual_thermometry_capabilities",
+                NET_DVR_GET_MANUALTHERM_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermal_intelligence_capabilities",
+                NET_DVR_GET_THERMINTELL_CAPABILITIES,
+                true,
+            ),
+            (
+                "panorama_image_capabilities",
+                NET_DVR_GET_PANORAMAIMAGE_CAPABILITIES,
+                false,
+            ),
+        ] {
+            let cond = if needs_channel_cond {
+                Some(thermal_cond.as_slice())
+            } else {
+                None
+            };
+            records.push(Self::discovery_probe_from_text_result(
+                "std_capability",
+                name,
+                &format!("ability_type=0x{ability_type:x}"),
+                self.query_std_ability_xml(ability_type, cond),
+            ));
+        }
+
+        match self.query_std_config_raw(
+            NET_DVR_GET_THERMOMETRY_MODE,
+            Some(thermal_cond.as_slice()),
+            256,
+        ) {
+            Ok(bytes) => {
+                let mode = bytes.get(4).copied().unwrap_or(0xFF);
+                let roi_enabled = bytes.get(5).copied().unwrap_or(0xFF);
+                let summary = format!(
+                    "mode={} ({}) roi_mode={} ({})",
+                    mode,
+                    thermometry_mode_name(mode),
+                    roi_enabled,
+                    thermometry_roi_mode_name(roi_enabled)
+                );
+                records.push(Self::discovery_probe_custom_success(
+                    "thermal_config",
+                    "thermometry_mode",
+                    "NET_DVR_GET_THERMOMETRY_MODE",
+                    &format!("{summary}; bytes_sample={}", hex_sample(&bytes, 32)),
+                ));
+            }
+            Err(err) => records.push(Self::discovery_probe_error(
+                "thermal_config",
+                "thermometry_mode",
+                "NET_DVR_GET_THERMOMETRY_MODE",
+                err.to_string(),
+            )),
+        }
+
+        match self.query_std_config_raw(
+            NET_DVR_GET_THERMOMETRY_BASICPARAM,
+            Some(thermal_cond.as_slice()),
+            2048,
+        ) {
+            Ok(bytes) => {
+                let enabled = bytes.get(4).copied().unwrap_or(0xFF);
+                let stream_overlay = bytes.get(5).copied().unwrap_or(0xFF);
+                let picture_overlay = bytes.get(6).copied().unwrap_or(0xFF);
+                let range = bytes.get(7).copied().unwrap_or(0xFF);
+                let unit = bytes.get(8).copied().unwrap_or(0xFF);
+                let emissivity = read_f32_le(&bytes, 12).unwrap_or(f32::NAN);
+                let summary = format!(
+                    "enabled={} stream_overlay={} picture_overlay={} range={} ({}) unit={} ({}) emissivity={:.2}",
+                    bool_u8_text(enabled),
+                    bool_u8_text(stream_overlay),
+                    bool_u8_text(picture_overlay),
+                    range,
+                    thermometry_range_name(range),
+                    unit,
+                    thermometry_unit_name(unit),
+                    emissivity
+                );
+                records.push(Self::discovery_probe_custom_success(
+                    "thermal_config",
+                    "thermometry_basic",
+                    "NET_DVR_GET_THERMOMETRY_BASICPARAM",
+                    &format!("{summary}; bytes_sample={}", hex_sample(&bytes, 64)),
+                ));
+            }
+            Err(err) => records.push(Self::discovery_probe_error(
+                "thermal_config",
+                "thermometry_basic",
+                "NET_DVR_GET_THERMOMETRY_BASICPARAM",
+                err.to_string(),
+            )),
+        }
+
+        match self.query_std_config_raw(
+            NET_DVR_GET_THERMAL_PIP,
+            Some(thermal_cond.as_slice()),
+            1024,
+        ) {
+            Ok(bytes) => {
+                let enabled = bytes.get(4).copied().unwrap_or(0xFF);
+                let pip_mode = bytes.get(5).copied().unwrap_or(0xFF);
+                let overlap = bytes.get(6).copied().unwrap_or(0xFF);
+                let transparency = bytes.get(7).copied().unwrap_or(0xFF);
+                let summary = format!(
+                    "enabled={} mode={} ({}) overlap_type={} ({}) transparency={}%",
+                    bool_u8_text(enabled),
+                    pip_mode,
+                    thermal_pip_mode_name(pip_mode),
+                    overlap,
+                    thermal_overlap_type_name(overlap),
+                    transparency
+                );
+                records.push(Self::discovery_probe_custom_success(
+                    "thermal_config",
+                    "thermal_pip",
+                    "NET_DVR_GET_THERMAL_PIP",
+                    &format!("{summary}; bytes_sample={}", hex_sample(&bytes, 32)),
+                ));
+            }
+            Err(err) => records.push(Self::discovery_probe_error(
+                "thermal_config",
+                "thermal_pip",
+                "NET_DVR_GET_THERMAL_PIP",
+                err.to_string(),
+            )),
+        }
+
+        for (name, path) in [
+            ("isapi_system_device_info", "/ISAPI/System/deviceInfo"),
+            ("isapi_streaming_channels", "/ISAPI/Streaming/channels"),
+            ("isapi_image_channels", "/ISAPI/Image/channels"),
+            (
+                "isapi_video_input_channels",
+                "/ISAPI/System/Video/inputs/channels",
+            ),
+            (
+                "isapi_thermal_basic_param",
+                "/ISAPI/Thermal/channels/1/thermometry/basicParam",
+            ),
+            (
+                "isapi_thermal_thermometry_mode",
+                "/ISAPI/Thermal/channels/1/thermometry/mode",
+            ),
+            (
+                "isapi_thermal_thermometry_caps",
+                "/ISAPI/Thermal/channels/1/thermometry/capabilities",
+            ),
+            (
+                "isapi_thermal_channel_caps",
+                "/ISAPI/Thermal/channels/1/capabilities",
+            ),
+        ] {
+            records.push(Self::discovery_probe_from_text_result(
+                "isapi_core",
+                name,
+                path,
+                self.query_isapi_xml(path),
+            ));
+        }
+
+        for (category, name, path) in targeted_sweep_paths(args.channel) {
+            records.push(Self::discovery_probe_from_text_result(
+                &category,
+                &name,
+                &path,
+                self.query_isapi_xml(&path),
+            ));
+        }
+
+        records
+    }
+
+    fn discovery_probe_custom_success(
+        category: &str,
+        name: &str,
+        target: &str,
+        summary: &str,
+    ) -> DiscoveryProbeRecord {
+        DiscoveryProbeRecord {
+            category: category.to_string(),
+            name: name.to_string(),
+            target: target.to_string(),
+            success: true,
+            sdk_error: None,
+            summary: summary.to_string(),
+            payload_bytes: summary.len(),
+            status_code: None,
+            status_string: None,
+            sub_status_code: None,
+            tags: Vec::new(),
+            hints: Vec::new(),
+            payload_sample: truncate_for_report(summary, 1024),
+            error_text: None,
+        }
+    }
+
+    fn discovery_probe_error(
+        category: &str,
+        name: &str,
+        target: &str,
+        error_message: String,
+    ) -> DiscoveryProbeRecord {
+        DiscoveryProbeRecord {
+            category: category.to_string(),
+            name: name.to_string(),
+            target: target.to_string(),
+            success: false,
+            sdk_error: extract_sdk_error_code(&error_message),
+            summary: truncate_for_report(&error_message, 240),
+            payload_bytes: error_message.len(),
+            status_code: extract_xml_value(&error_message, "statusCode"),
+            status_string: extract_xml_value(&error_message, "statusString"),
+            sub_status_code: extract_xml_value(&error_message, "subStatusCode"),
+            tags: extract_xml_tags(&error_message, 12),
+            hints: extract_hints(&error_message),
+            payload_sample: truncate_for_report(&error_message, 2048),
+            error_text: Some(truncate_for_report(&error_message, 2048)),
+        }
+    }
+
+    fn discovery_probe_from_text_result(
+        category: &str,
+        name: &str,
+        target: &str,
+        result: Result<String>,
+    ) -> DiscoveryProbeRecord {
+        match result {
+            Ok(payload) => DiscoveryProbeRecord {
+                category: category.to_string(),
+                name: name.to_string(),
+                target: target.to_string(),
+                success: true,
+                sdk_error: None,
+                summary: summarize_xml_payload(&payload),
+                payload_bytes: payload.len(),
+                status_code: extract_xml_value(&payload, "statusCode"),
+                status_string: extract_xml_value(&payload, "statusString"),
+                sub_status_code: extract_xml_value(&payload, "subStatusCode"),
+                tags: extract_xml_tags(&payload, 12),
+                hints: extract_hints(&payload),
+                payload_sample: truncate_for_report(&payload, 2048),
+                error_text: None,
+            },
+            Err(err) => Self::discovery_probe_error(category, name, target, err.to_string()),
+        }
+    }
+
+    fn log_device_ability_summary(&self) {
+        let queries = [
+            ("device_ability_info", DEVICE_ABILITY_INFO),
+            ("device_network_ability", DEVICE_NETWORK_ABILITY),
+            ("stream_ability", STREAM_ABILITY),
+            ("system_management_ability", SYSTEM_MANAGEMENT_ABILITY),
+        ];
+
+        for (label, ability_type) in queries {
+            match self.query_device_ability_xml(ability_type) {
+                Ok(xml) => println!("  {label}: {}", summarize_xml_payload(&xml)),
+                Err(err) => println!("  {label}: unavailable ({err})"),
+            }
+        }
+    }
+
+    fn log_stream_topology_summary(&self) {
+        match self.query_ipparacfg_v40_summary() {
+            Ok((group_num, analog_num, digital_num, start_dchan, returned_bytes)) => println!(
+                "  ipparacfg_v40: groups={} analog_chans={} digital_chans={} start_dchan={} payload_bytes={}",
+                group_num, analog_num, digital_num, start_dchan, returned_bytes
+            ),
+            Err(err) => println!("  ipparacfg_v40: unavailable ({err})"),
+        }
+    }
+
+    fn log_std_capability_summary(&self, channel: i32) {
+        let thermal_cond = build_thermometry_cond_bytes(channel);
+        let queries = [
+            (
+                "streaming_capabilities",
+                NET_DVR_GET_STREAMING_CAPABILITIES,
+                false,
+            ),
+            (
+                "preview_mode_capabilities",
+                NET_DVR_GET_PREVIEW_MODE_CAPABILITIES,
+                false,
+            ),
+            (
+                "thermal_capabilities",
+                NET_DVR_GET_THERMAL_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermometry_basicparam_capabilities",
+                NET_DVR_GET_THERMOMETRY_BASICPARAM_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermometry_mode_capabilities",
+                NET_DVR_GET_THERMOMETRY_MODE_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermal_pip_capabilities",
+                NET_DVR_GET_THERMAL_PIP_CAPABILITIES,
+                true,
+            ),
+            (
+                "manual_thermometry_capabilities",
+                NET_DVR_GET_MANUALTHERM_CAPABILITIES,
+                true,
+            ),
+            (
+                "thermal_intelligence_capabilities",
+                NET_DVR_GET_THERMINTELL_CAPABILITIES,
+                true,
+            ),
+            (
+                "panorama_image_capabilities",
+                NET_DVR_GET_PANORAMAIMAGE_CAPABILITIES,
+                false,
+            ),
+        ];
+
+        for (label, ability_type, needs_channel_cond) in queries {
+            let cond = if needs_channel_cond {
+                Some(thermal_cond.as_slice())
+            } else {
+                None
+            };
+            match self.query_std_ability_xml(ability_type, cond) {
+                Ok(xml) => println!("  {label}: {}", summarize_xml_payload(&xml)),
+                Err(err) => println!("  {label}: unavailable ({err})"),
+            }
+        }
+    }
+
+    fn log_thermal_config_summary(&self, channel: i32) {
+        let thermal_cond = build_thermometry_cond_bytes(channel);
+
+        match self.query_std_config_raw(
+            NET_DVR_GET_THERMOMETRY_MODE,
+            Some(thermal_cond.as_slice()),
+            256,
+        ) {
+            Ok(bytes) => {
+                let mode = bytes.get(4).copied().unwrap_or(0xFF);
+                let roi_enabled = bytes.get(5).copied().unwrap_or(0xFF);
+                println!(
+                    "  thermometry_mode: mode={} ({}) roi_mode={} ({})",
+                    mode,
+                    thermometry_mode_name(mode),
+                    roi_enabled,
+                    thermometry_roi_mode_name(roi_enabled)
+                );
+            }
+            Err(err) => println!("  thermometry_mode: unavailable ({err})"),
+        }
+
+        match self.query_std_config_raw(
+            NET_DVR_GET_THERMOMETRY_BASICPARAM,
+            Some(thermal_cond.as_slice()),
+            2048,
+        ) {
+            Ok(bytes) => {
+                let enabled = bytes.get(4).copied().unwrap_or(0xFF);
+                let stream_overlay = bytes.get(5).copied().unwrap_or(0xFF);
+                let picture_overlay = bytes.get(6).copied().unwrap_or(0xFF);
+                let range = bytes.get(7).copied().unwrap_or(0xFF);
+                let unit = bytes.get(8).copied().unwrap_or(0xFF);
+                let curve_mode = bytes.get(9).copied().unwrap_or(0xFF);
+                let fire_image_mode = bytes.get(10).copied().unwrap_or(0xFF);
+                let show_temp_strip = bytes.get(11).copied().unwrap_or(0xFF);
+                let emissivity = read_f32_le(&bytes, 12).unwrap_or(f32::NAN);
+                let distance_unit = bytes.get(16).copied().unwrap_or(0xFF);
+                let humidity = bytes.get(17).copied().unwrap_or(0xFF);
+
+                println!(
+                    "  thermometry_basic: enabled={} stream_overlay={} picture_overlay={} range={} ({}) unit={} ({}) curve_mode={} fire_image_mode={} show_temp_strip={} emissivity={:.2} distance_unit={} ({}) env_humidity={}%",
+                    bool_u8_text(enabled),
+                    bool_u8_text(stream_overlay),
+                    bool_u8_text(picture_overlay),
+                    range,
+                    thermometry_range_name(range),
+                    unit,
+                    thermometry_unit_name(unit),
+                    curve_mode,
+                    fire_image_mode,
+                    bool_u8_text(show_temp_strip),
+                    emissivity,
+                    distance_unit,
+                    distance_unit_name(distance_unit),
+                    humidity
+                );
+            }
+            Err(err) => println!("  thermometry_basic: unavailable ({err})"),
+        }
+
+        match self.query_std_config_raw(
+            NET_DVR_GET_THERMAL_PIP,
+            Some(thermal_cond.as_slice()),
+            1024,
+        ) {
+            Ok(bytes) => {
+                let enabled = bytes.get(4).copied().unwrap_or(0xFF);
+                let pip_mode = bytes.get(5).copied().unwrap_or(0xFF);
+                let overlap = bytes.get(6).copied().unwrap_or(0xFF);
+                let transparency = bytes.get(7).copied().unwrap_or(0xFF);
+                println!(
+                    "  thermal_pip: enabled={} mode={} ({}) overlap_type={} ({}) transparency={}%",
+                    bool_u8_text(enabled),
+                    pip_mode,
+                    thermal_pip_mode_name(pip_mode),
+                    overlap,
+                    thermal_overlap_type_name(overlap),
+                    transparency
+                );
+            }
+            Err(err) => println!("  thermal_pip: unavailable ({err})"),
+        }
+    }
+
+    fn query_device_ability_xml(&self, ability_type: Dword) -> Result<String> {
+        let mut out = vec![0_u8; 256 * 1024];
+        let ok = unsafe {
+            (self.hcnetsdk.get_device_ability)(
+                self.user_id,
+                ability_type,
+                std::ptr::null_mut(),
+                0,
+                out.as_mut_ptr().cast(),
+                out.len() as Dword,
+            )
+        };
+        if ok == 0 {
+            bail!("SDK error {}", self.sdk_last_error());
+        }
+        Ok(buffer_to_text(&out, None))
+    }
+
+    fn query_std_ability_xml(&self, ability_type: Dword, cond: Option<&[u8]>) -> Result<String> {
+        let mut out = vec![0_u8; 256 * 1024];
+        let mut status = vec![0_u8; 64 * 1024];
+        let mut ability = NetDvrStdAbility {
+            cond_buffer: cond.map_or(std::ptr::null_mut(), |c| c.as_ptr().cast_mut().cast()),
+            cond_size: cond.map_or(0, |c| c.len() as Dword),
+            out_buffer: out.as_mut_ptr().cast(),
+            out_size: out.len() as Dword,
+            status_buffer: status.as_mut_ptr().cast(),
+            status_size: status.len() as Dword,
+            ret_size: 0,
+            res: [0; 32],
+        };
+
+        let ok =
+            unsafe { (self.hcnetsdk.get_std_ability)(self.user_id, ability_type, &mut ability) };
+        if ok != 0 {
+            let mut payload = buffer_to_text(&out, Some(ability.ret_size as usize));
+            if payload.is_empty() {
+                payload = buffer_to_text(&status, None);
+            }
+            if !payload.is_empty() {
+                return Ok(payload);
+            }
+        }
+
+        // Fallback: some capabilities are exposed through GetDeviceAbility.
+        let mut fallback_out = vec![0_u8; 256 * 1024];
+        let fallback_ok = unsafe {
+            (self.hcnetsdk.get_device_ability)(
+                self.user_id,
+                ability_type,
+                cond.map_or(std::ptr::null_mut(), |c| c.as_ptr().cast_mut().cast()),
+                cond.map_or(0, |c| c.len() as Dword),
+                fallback_out.as_mut_ptr().cast(),
+                fallback_out.len() as Dword,
+            )
+        };
+        if fallback_ok == 0 {
+            bail!("SDK error {}", self.sdk_last_error());
+        }
+        Ok(buffer_to_text(&fallback_out, None))
+    }
+
+    fn query_isapi_xml(&self, path: &str) -> Result<String> {
+        let request = format!("GET {path}");
+        let mut request_buf = request.into_bytes();
+        request_buf.push(0);
+        let mut out = vec![0_u8; 256 * 1024];
+        let mut status = vec![0_u8; 16 * 1024];
+
+        let mut input = NetDvrXmlConfigInput {
+            size: std::mem::size_of::<NetDvrXmlConfigInput>() as Dword,
+            request_url: request_buf.as_mut_ptr().cast(),
+            request_url_len: request_buf.len().saturating_sub(1) as Dword,
+            in_buffer: std::ptr::null_mut(),
+            in_buffer_size: 0,
+            recv_timeout: 5000,
+            force_encrypt: 0,
+            num_of_multipart: 0,
+            mime_type: 0,
+            res: [0; 29],
+        };
+        let mut output = NetDvrXmlConfigOutput {
+            size: std::mem::size_of::<NetDvrXmlConfigOutput>() as Dword,
+            out_buffer: out.as_mut_ptr().cast(),
+            out_buffer_size: out.len() as Dword,
+            returned_xml_size: 0,
+            status_buffer: status.as_mut_ptr().cast(),
+            status_size: status.len() as Dword,
+            data_buffer: std::ptr::null_mut(),
+            num_of_multipart: 0,
+            res: [0; 23],
+        };
+
+        let ok = unsafe { (self.hcnetsdk.std_xml_config)(self.user_id, &mut input, &mut output) };
+        if ok == 0 {
+            let status_text = buffer_to_text(&status, None);
+            if status_text.is_empty() {
+                bail!("SDK error {}", self.sdk_last_error());
+            }
+            bail!("SDK error {} ({status_text})", self.sdk_last_error());
+        }
+
+        let mut payload = buffer_to_text(&out, Some(output.returned_xml_size as usize));
+        if payload.is_empty() {
+            payload = buffer_to_text(&status, None);
+        }
+        Ok(payload)
+    }
+
+    fn log_isapi_surface_summary(&self) {
+        let requests = [
+            ("isapi_system_device_info", "/ISAPI/System/deviceInfo"),
+            ("isapi_streaming_channels", "/ISAPI/Streaming/channels"),
+            ("isapi_image_channels", "/ISAPI/Image/channels"),
+            (
+                "isapi_video_input_channels",
+                "/ISAPI/System/Video/inputs/channels",
+            ),
+            (
+                "isapi_thermal_basic_param",
+                "/ISAPI/Thermal/channels/1/thermometry/basicParam",
+            ),
+            (
+                "isapi_thermal_thermometry_mode",
+                "/ISAPI/Thermal/channels/1/thermometry/mode",
+            ),
+            (
+                "isapi_thermal_thermometry_caps",
+                "/ISAPI/Thermal/channels/1/thermometry/capabilities",
+            ),
+            (
+                "isapi_thermal_channel_caps",
+                "/ISAPI/Thermal/channels/1/capabilities",
+            ),
+        ];
+
+        for (label, path) in requests {
+            match self.query_isapi_xml(path) {
+                Ok(xml) => println!("  {label}: {}", summarize_xml_payload(&xml)),
+                Err(err) => println!("  {label}: unavailable ({err})"),
+            }
+        }
+    }
+
+    fn query_std_config_raw(
+        &self,
+        command: Dword,
+        cond: Option<&[u8]>,
+        out_size: usize,
+    ) -> Result<Vec<u8>> {
+        let mut out = vec![0_u8; out_size.max(128)];
+        let mut status = vec![0_u8; 16 * 1024];
+
+        let mut cfg = NetDvrStdConfig {
+            cond_buffer: cond.map_or(std::ptr::null_mut(), |c| c.as_ptr().cast_mut().cast()),
+            cond_size: cond.map_or(0, |c| c.len() as Dword),
+            in_buffer: std::ptr::null_mut(),
+            in_size: 0,
+            out_buffer: out.as_mut_ptr().cast(),
+            out_size: out.len() as Dword,
+            status_buffer: status.as_mut_ptr().cast(),
+            status_size: status.len() as Dword,
+            xml_buffer: std::ptr::null_mut(),
+            xml_size: 0,
+            data_type: 0,
+            res: [0; 23],
+        };
+
+        let ok = unsafe { (self.hcnetsdk.get_std_config)(self.user_id, command, &mut cfg) };
+        if ok == 0 {
+            let status_text = buffer_to_text(&status, None);
+            if status_text.is_empty() {
+                bail!("SDK error {}", self.sdk_last_error());
+            }
+            bail!("SDK error {} ({status_text})", self.sdk_last_error());
+        }
+        Ok(out)
+    }
+
+    fn query_ipparacfg_v40_summary(&self) -> Result<(u32, u32, u32, u32, u32)> {
+        let mut out = vec![0_u8; 512 * 1024];
+        let mut returned = 0_u32;
+        let ok = unsafe {
+            (self.hcnetsdk.get_dvr_config)(
+                self.user_id,
+                NET_DVR_GET_IPPARACFG_V40,
+                0,
+                out.as_mut_ptr().cast(),
+                out.len() as Dword,
+                &mut returned,
+            )
+        };
+        if ok == 0 {
+            bail!("SDK error {}", self.sdk_last_error());
+        }
+        if returned < 20 {
+            bail!("short response ({returned} bytes)");
+        }
+
+        let group_num = read_u32_le(&out, 4).unwrap_or_default();
+        let analog_num = read_u32_le(&out, 8).unwrap_or_default();
+        let digital_num = read_u32_le(&out, 12).unwrap_or_default();
+        let start_dchan = read_u32_le(&out, 16).unwrap_or_default();
+        Ok((group_num, analog_num, digital_num, start_dchan, returned))
     }
 
     fn start_preview(
@@ -824,6 +1762,547 @@ fn clamp_u8(v: i32) -> u8 {
         255
     } else {
         v as u8
+    }
+}
+
+fn yes_no(v: bool) -> &'static str {
+    if v { "yes" } else { "no" }
+}
+
+fn bool_u8_text(v: u8) -> &'static str {
+    match v {
+        0 => "no",
+        1 => "yes",
+        _ => "unknown",
+    }
+}
+
+fn c_byte_array_to_string(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+}
+
+fn stream_proto_name(v: u8) -> &'static str {
+    match v {
+        0 => "private",
+        1 => "rtsp",
+        2 => "private+rtsp",
+        _ => "unknown",
+    }
+}
+
+fn thermometry_mode_name(v: u8) -> &'static str {
+    match v {
+        0 => "normal",
+        1 => "expert",
+        _ => "unknown",
+    }
+}
+
+fn thermometry_roi_mode_name(v: u8) -> &'static str {
+    match v {
+        0 => "reserved",
+        1 => "close",
+        2 => "open",
+        _ => "unknown",
+    }
+}
+
+fn thermometry_unit_name(v: u8) -> &'static str {
+    match v {
+        0 => "C",
+        1 => "F",
+        2 => "K",
+        _ => "unknown",
+    }
+}
+
+fn distance_unit_name(v: u8) -> &'static str {
+    match v {
+        0 => "meter",
+        1 => "feet",
+        2 => "centimeter",
+        _ => "unknown",
+    }
+}
+
+fn thermometry_range_name(v: u8) -> &'static str {
+    match v {
+        0 => "default",
+        1 => "-20..150",
+        2 => "0..550",
+        3 => "0..650",
+        4 => "-40..150",
+        5 => "0..1200",
+        6 => "-20..120",
+        7 => "20..350",
+        8 => "20..45",
+        9 => "30..45",
+        0xFF => "auto",
+        _ => "unknown",
+    }
+}
+
+fn thermal_pip_mode_name(v: u8) -> &'static str {
+    match v {
+        0 => "overlay",
+        1 => "fusion",
+        2 => "normal",
+        _ => "unknown",
+    }
+}
+
+fn thermal_overlap_type_name(v: u8) -> &'static str {
+    match v {
+        0 => "visible-over-thermal",
+        1 => "thermal-over-visible",
+        _ => "unknown",
+    }
+}
+
+fn buffer_to_text(buf: &[u8], preferred_len: Option<usize>) -> String {
+    let mut end = preferred_len.unwrap_or(buf.len()).min(buf.len());
+    if end == 0 {
+        end = buf.len();
+    }
+    if let Some(nul_pos) = buf[..end].iter().position(|&b| b == 0) {
+        end = nul_pos;
+    }
+    String::from_utf8_lossy(&buf[..end]).trim().to_string()
+}
+
+fn extract_xml_tags(xml: &str, max_tags: usize) -> Vec<String> {
+    let bytes = xml.as_bytes();
+    let mut tags = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() && tags.len() < max_tags {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i >= bytes.len() {
+            break;
+        }
+        let kind = bytes[i];
+        if kind == b'/' || kind == b'?' || kind == b'!' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'>' || b == b'/' || b.is_ascii_whitespace() {
+                break;
+            }
+            i += 1;
+        }
+        if i > start {
+            let raw_tag = &xml[start..i];
+            let tag = raw_tag.rsplit(':').next().unwrap_or(raw_tag).to_string();
+            if !tag.is_empty() && !tags.iter().any(|existing| existing == &tag) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags
+}
+
+fn summarize_xml_payload(xml: &str) -> String {
+    if xml.is_empty() {
+        return "empty".to_string();
+    }
+    let tags = extract_xml_tags(xml, 10);
+    let hints = extract_hints(xml);
+
+    let tag_text = if tags.is_empty() {
+        "tags=<none>".to_string()
+    } else {
+        format!("tags={}", tags.join(","))
+    };
+    let hint_text = if hints.is_empty() {
+        "hints=<none>".to_string()
+    } else {
+        format!("hints={}", hints.join(","))
+    };
+    format!("{} bytes; {tag_text}; {hint_text}", xml.len())
+}
+
+fn extract_hints(xml: &str) -> Vec<String> {
+    let lower = xml.to_ascii_lowercase();
+    let mut hints = Vec::new();
+    for keyword in [
+        "thermometry",
+        "thermal",
+        "pip",
+        "fusion",
+        "stream",
+        "preview",
+        "rtsp",
+        "srtp",
+        "manual",
+        "mode",
+        "dehaze",
+        "wdr",
+        "focus",
+    ] {
+        if lower.contains(keyword) {
+            hints.push(keyword.to_string());
+        }
+    }
+    hints
+}
+
+fn extract_xml_value(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)?;
+    let value_start = start + open.len();
+    let end = text[value_start..].find(&close)?;
+    Some(text[value_start..value_start + end].trim().to_string())
+}
+
+fn extract_sdk_error_code(text: &str) -> Option<u32> {
+    let marker = "SDK error ";
+    let idx = text.find(marker)?;
+    let digits: String = text[idx + marker.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse::<u32>().ok()
+    }
+}
+
+fn truncate_for_report(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let mut truncated = String::new();
+    for ch in text.chars().take(max_chars) {
+        truncated.push(ch);
+    }
+    truncated.push_str("...(truncated)");
+    truncated
+}
+
+fn sanitize_filename_token(token: &str) -> String {
+    token
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn hex_sample(bytes: &[u8], max_bytes: usize) -> String {
+    let mut out = String::new();
+    for (idx, b) in bytes.iter().take(max_bytes).enumerate() {
+        if idx > 0 {
+            out.push(' ');
+        }
+        out.push_str(&format!("{b:02x}"));
+    }
+    if bytes.len() > max_bytes {
+        out.push_str(" ...");
+    }
+    out
+}
+
+fn json_escape(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn json_string(text: &str) -> String {
+    format!("\"{}\"", json_escape(text))
+}
+
+fn write_json_opt_string(out: &mut String, key: &str, value: &Option<String>, with_comma: bool) {
+    out.push_str(&json_string(key));
+    out.push(':');
+    match value {
+        Some(v) => out.push_str(&json_string(v)),
+        None => out.push_str("null"),
+    }
+    if with_comma {
+        out.push(',');
+    }
+}
+
+fn write_json_string_array(out: &mut String, key: &str, values: &[String], with_comma: bool) {
+    out.push_str(&json_string(key));
+    out.push(':');
+    out.push('[');
+    for (idx, item) in values.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push_str(&json_string(item));
+    }
+    out.push(']');
+    if with_comma {
+        out.push(',');
+    }
+}
+
+fn discovery_report_to_json(report: &DiscoveryReport) -> String {
+    let mut out = String::new();
+    out.push('{');
+    out.push_str(&json_string("generated_at_ms"));
+    out.push(':');
+    out.push_str(&report.generated_at_ms.to_string());
+    out.push(',');
+    out.push_str(&json_string("camera_ip"));
+    out.push(':');
+    out.push_str(&json_string(&report.camera_ip));
+    out.push(',');
+    out.push_str(&json_string("camera_port"));
+    out.push(':');
+    out.push_str(&report.camera_port.to_string());
+    out.push(',');
+    out.push_str(&json_string("channel"));
+    out.push(':');
+    out.push_str(&report.channel.to_string());
+    out.push(',');
+    out.push_str(&json_string("sdk_root"));
+    out.push(':');
+    out.push_str(&json_string(&report.sdk_root));
+    out.push(',');
+
+    out.push_str(&json_string("login_device"));
+    out.push(':');
+    out.push('{');
+    out.push_str(&json_string("serial"));
+    out.push(':');
+    out.push_str(&json_string(&report.login_serial));
+    out.push(',');
+    out.push_str(&json_string("device_type"));
+    out.push(':');
+    out.push_str(&report.login_device_type.to_string());
+    out.push(',');
+    out.push_str(&json_string("analog_channels"));
+    out.push(':');
+    out.push_str(&report.login_analog_channels.to_string());
+    out.push(',');
+    out.push_str(&json_string("ip_channels_max"));
+    out.push(':');
+    out.push_str(&report.login_ip_channels_max.to_string());
+    out.push('}');
+    out.push(',');
+
+    out.push_str(&json_string("records"));
+    out.push(':');
+    out.push('[');
+    for (idx, record) in report.records.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        out.push_str(&json_string("category"));
+        out.push(':');
+        out.push_str(&json_string(&record.category));
+        out.push(',');
+        out.push_str(&json_string("name"));
+        out.push(':');
+        out.push_str(&json_string(&record.name));
+        out.push(',');
+        out.push_str(&json_string("target"));
+        out.push(':');
+        out.push_str(&json_string(&record.target));
+        out.push(',');
+        out.push_str(&json_string("success"));
+        out.push(':');
+        out.push_str(if record.success { "true" } else { "false" });
+        out.push(',');
+        out.push_str(&json_string("sdk_error"));
+        out.push(':');
+        match record.sdk_error {
+            Some(v) => out.push_str(&v.to_string()),
+            None => out.push_str("null"),
+        }
+        out.push(',');
+        out.push_str(&json_string("summary"));
+        out.push(':');
+        out.push_str(&json_string(&record.summary));
+        out.push(',');
+        out.push_str(&json_string("payload_bytes"));
+        out.push(':');
+        out.push_str(&record.payload_bytes.to_string());
+        out.push(',');
+        write_json_opt_string(&mut out, "status_code", &record.status_code, true);
+        write_json_opt_string(&mut out, "status_string", &record.status_string, true);
+        write_json_opt_string(&mut out, "sub_status_code", &record.sub_status_code, true);
+        write_json_string_array(&mut out, "tags", &record.tags, true);
+        write_json_string_array(&mut out, "hints", &record.hints, true);
+        out.push_str(&json_string("payload_sample"));
+        out.push(':');
+        out.push_str(&json_string(&record.payload_sample));
+        out.push(',');
+        write_json_opt_string(&mut out, "error_text", &record.error_text, false);
+        out.push('}');
+    }
+    out.push(']');
+    out.push('}');
+    out.push('\n');
+    out
+}
+
+fn targeted_sweep_paths(channel: i32) -> Vec<(String, String, String)> {
+    let mut channels = Vec::new();
+    for ch in [channel.max(1), 1, 2] {
+        if !channels.contains(&ch) {
+            channels.push(ch);
+        }
+    }
+
+    let thermal_templates = [
+        ("channel", "/ISAPI/Thermal/channels/{ch}"),
+        (
+            "channel_capabilities",
+            "/ISAPI/Thermal/channels/{ch}/capabilities",
+        ),
+        (
+            "thermometry_basic_param",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/basicParam",
+        ),
+        (
+            "thermometry_mode",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/mode",
+        ),
+        (
+            "thermometry_capabilities",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/capabilities",
+        ),
+        (
+            "thermometry_preset_info",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/presetInfo",
+        ),
+        (
+            "thermometry_alarm_rule",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/alarmRule",
+        ),
+        (
+            "thermometry_diff_comparison",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/diffComparison",
+        ),
+        (
+            "thermometry_trigger",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/trigger",
+        ),
+        (
+            "thermometry_schedule",
+            "/ISAPI/Thermal/channels/{ch}/thermometry/schedule",
+        ),
+        ("thermal_pip", "/ISAPI/Thermal/channels/{ch}/pip"),
+        (
+            "manual_thermometry",
+            "/ISAPI/Thermal/channels/{ch}/manualThermometry",
+        ),
+        (
+            "manual_thermometry_basic_param",
+            "/ISAPI/Thermal/channels/{ch}/manualThermometry/basicParam",
+        ),
+        (
+            "manual_thermometry_capabilities",
+            "/ISAPI/Thermal/channels/{ch}/manualThermometry/capabilities",
+        ),
+        ("thermal_intell", "/ISAPI/Thermal/channels/{ch}/thermIntell"),
+        (
+            "thermal_intell_capabilities",
+            "/ISAPI/Thermal/channels/{ch}/thermIntell/capabilities",
+        ),
+    ];
+
+    let imaging_templates = [
+        ("image_channel", "/ISAPI/Image/channels/{ch}"),
+        (
+            "image_capabilities",
+            "/ISAPI/Image/channels/{ch}/capabilities",
+        ),
+        ("image_focus", "/ISAPI/Image/channels/{ch}/focus"),
+        ("image_exposure", "/ISAPI/Image/channels/{ch}/exposure"),
+        (
+            "image_white_balance",
+            "/ISAPI/Image/channels/{ch}/whiteBalance",
+        ),
+        (
+            "image_wide_dynamic_range",
+            "/ISAPI/Image/channels/{ch}/wideDynamicRange",
+        ),
+        ("image_dehaze", "/ISAPI/Image/channels/{ch}/dehaze"),
+        (
+            "image_noise_reduce",
+            "/ISAPI/Image/channels/{ch}/noiseReduce",
+        ),
+        ("image_scene", "/ISAPI/Image/channels/{ch}/scene"),
+    ];
+
+    let mut out = Vec::new();
+    for ch in channels {
+        for (suffix, template) in thermal_templates {
+            let path = template.replace("{ch}", &ch.to_string());
+            out.push((
+                "isapi_thermal_sweep".to_string(),
+                format!("thermal_ch{ch}_{suffix}"),
+                path,
+            ));
+        }
+        for (suffix, template) in imaging_templates {
+            let path = template.replace("{ch}", &ch.to_string());
+            out.push((
+                "isapi_imaging_sweep".to_string(),
+                format!("imaging_ch{ch}_{suffix}"),
+                path,
+            ));
+        }
+    }
+    out
+}
+
+fn read_u32_le(buf: &[u8], offset: usize) -> Option<u32> {
+    let bytes = buf.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_f32_le(buf: &[u8], offset: usize) -> Option<f32> {
+    let bytes = buf.get(offset..offset + 4)?;
+    Some(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn build_thermometry_cond_bytes(channel: i32) -> Vec<u8> {
+    let cond = NetDvrThermometryCond {
+        size: std::mem::size_of::<NetDvrThermometryCond>() as Dword,
+        channel: channel.max(1) as Dword,
+        preset_no: 0,
+        res: [0; 62],
+    };
+    unsafe {
+        std::slice::from_raw_parts(
+            (&cond as *const NetDvrThermometryCond).cast(),
+            std::mem::size_of::<NetDvrThermometryCond>(),
+        )
+        .to_vec()
     }
 }
 
@@ -1181,6 +2660,10 @@ struct Args {
     window_height: u32,
     #[arg(long, default_value = "runtime_logs/sdk_logs_rust")]
     log_dir: PathBuf,
+    #[arg(long, default_value_t = false)]
+    discover: bool,
+    #[arg(long, default_value = "runtime_logs/discovery_reports")]
+    discover_report_dir: PathBuf,
 }
 
 fn main() -> Result<()> {
