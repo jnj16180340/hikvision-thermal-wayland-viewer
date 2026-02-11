@@ -5,6 +5,7 @@ Minimal Hikvision thermal camera viewer implemented in Rust with:
 - `HCNetSDK` (`NET_DVR_Login_V40`, `NET_DVR_RealPlay_V40`)
 - `PlayCtrl` decode callback (`PlayM4_SetDecCallBackMend`)
 - Wayland-only windowing/rendering (`winit` Wayland feature + `softbuffer`)
+- Headless GStreamer `appsrc` RTSP publishing mode
 
 ## Fedora Dependencies (Wayland only)
 
@@ -12,7 +13,10 @@ Minimal Hikvision thermal camera viewer implemented in Rust with:
 sudo dnf install -y \
   pkgconf-pkg-config \
   wayland-devel wayland-protocols-devel libxkbcommon-devel \
-  mesa-libEGL-devel mesa-libgbm-devel vulkan-loader-devel
+  mesa-libEGL-devel mesa-libgbm-devel vulkan-loader-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel \
+  gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+  gstreamer1-plugins-ugly-free
 ```
 
 Rust toolchain:
@@ -42,6 +46,8 @@ HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --focus-style SEMIAUTOMATIC
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --osd-date-time-enabled false --osd-date-display-enabled false --osd-channel-name-enabled false --osd-battery-enabled false
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --osd-snapshot
 HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --osd-snapshot --osd-date-time-enabled false
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --headless-publish-rtsp
+HIK_PASSWORD='abcd1234' cargo run -- --ip 10.15.12.1 --headless-publish-rtsp --publish-rtsp-address 0.0.0.0 --publish-rtsp-port 8554 --publish-rtsp-path /hik
 ```
 
 Binary/package name:
@@ -95,3 +101,14 @@ For an **AGM Taipan `TM10-256`** on this test bench, use:
   - `vendor/linux/x86_64/hik_sdk`
   - Add additional SDK bundles under sibling directories (for example `vendor/linux/aarch64/...`) and point `HIK_SDK_ROOT` or `--sdk-root` to the desired one.
 - Press `Esc`, `q`, or close the window to stop the viewer.
+- Headless publishing options (grouped under `Headless Publish` in `--help`) are:
+  - `--headless-publish-rtsp` (enable headless mode; no Wayland window created)
+  - `--publish-rtsp-address` (default `0.0.0.0`)
+  - `--publish-rtsp-port` (default `8554`)
+  - `--publish-rtsp-path` (default `/hik`)
+  - `--publish-fps` (default `25`)
+  - `--publish-bitrate-kbps` (default `2048`)
+  - `--publish-wait-for-first-frame-ms` (default `10000`)
+- When headless RTSP mode is enabled, connect clients to:
+  - `rtsp://<publisher-host>:<publish-rtsp-port><publish-rtsp-path>`
+  - If bind address is `0.0.0.0`, do not use `0.0.0.0` in VLC; use `127.0.0.1` (local) or the host LAN IP.
