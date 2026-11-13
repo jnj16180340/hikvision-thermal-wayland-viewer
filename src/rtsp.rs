@@ -89,7 +89,7 @@ pub(crate) fn run_headless_rtsp_publisher(
         "( appsrc name=hiksrc is-live=true block=false format=time do-timestamp=true \
          caps=video/x-raw,format=BGRA,width={width},height={height},framerate={fps}/1 ! \
          queue leaky=downstream max-size-buffers=2 ! \
-         videoconvert ! \
+         videoconvert ! video/x-raw,format=I420 ! \
          x264enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate_kbps} key-int-max={fps} ! \
          rtph264pay name=pay0 pt=96 config-interval=1 )"
     );
