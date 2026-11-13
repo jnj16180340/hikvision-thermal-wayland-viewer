@@ -14,7 +14,7 @@ sudo dnf install -y \
   pkgconf-pkg-config \
   wayland-devel wayland-protocols-devel libxkbcommon-devel \
   mesa-libEGL-devel mesa-libgbm-devel vulkan-loader-devel \
-  gstreamer1-devel gstreamer1-plugins-base-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-rtsp-server-devel \
   gstreamer1-plugins-good gstreamer1-plugins-bad-free \
   gstreamer1-plugins-ugly-free
 ```
