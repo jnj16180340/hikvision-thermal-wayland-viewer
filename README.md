@@ -25,6 +25,10 @@ Rust toolchain:
 rustup toolchain install stable
 ```
 
+## Connect to device wifi
+
+By default, the password is the serial number. So, network `Wlan-L31278659` has password `L31278659`
+
 ## Run
 
 From this repository root:
