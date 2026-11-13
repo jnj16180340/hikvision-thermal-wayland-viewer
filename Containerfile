@@ -10,7 +10,7 @@ RUN cargo build --release --locked
 
 FROM registry.fedoraproject.org/fedora:44
 # x264enc is not in Fedora proper; it comes from RPM Fusion free's gstreamer1-plugins-ugly.
-RUN dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-44.noarch.rpm \
+RUN dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
     && dnf install -y gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good \
       gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free gstreamer1-plugins-ugly gstreamer1-rtsp-server \
       libxkbcommon libwayland-client \

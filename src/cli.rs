@@ -148,7 +148,7 @@ pub(crate) struct Args {
     pub(crate) device_port: u16,
     #[arg(long, env = "HIK_USER", default_value = "admin")]
     pub(crate) username: String,
-    #[arg(long, env = "HIK_PASSWORD")]
+    #[arg(long, env = "HIK_PASSWORD", hide_env_values = true)]
     pub(crate) password: String,
     #[arg(long, default_value_t = 1)]
     pub(crate) channel: i32,
