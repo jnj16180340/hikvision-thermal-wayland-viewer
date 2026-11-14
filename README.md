@@ -116,3 +116,15 @@ For an **AGM Taipan `TM10-256`** on this test bench, use:
 - When headless RTSP mode is enabled, connect clients to:
   - `rtsp://<publisher-host>:<publish-rtsp-port><publish-rtsp-path>`
   - If bind address is `0.0.0.0`, do not use `0.0.0.0` in VLC; use `127.0.0.1` (local) or the host LAN IP.
+
+## Container
+
+Headless RTSP publisher image (Fedora base, vendored x86_64 SDK baked in):
+
+```bash
+podman build -t hik-bridge .
+podman run --rm -e HIK_PASSWORD='abcd1234' -p 8554:8554 hik-bridge \
+  --ip 10.15.12.1 --headless-publish-rtsp
+```
+
+The stream is then at `rtsp://localhost:8554/hik`. Used by the NVR stack in the parent MotionCamera repo.
